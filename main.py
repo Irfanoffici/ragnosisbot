@@ -23,8 +23,7 @@ from telegram.ext import (
     filters, 
     ContextTypes, 
     ConversationHandler,
-    CallbackQueryHandler,
-    JobQueue
+    CallbackQueryHandler
 )
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -710,26 +709,13 @@ class DynamicRagnosisBot:
         # Add handler for other features
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_dynamic_message))
 
-    async def update_analytics(self, context: ContextTypes.DEFAULT_TYPE):
-        """Update analytics periodically"""
-        self.analytics['active_conversations'] = len(self.user_sessions)
-        logger.info(f"Analytics updated: {self.analytics}")
-
     async def run(self):
         """Run the dynamic bot"""
         try:
-            # Create application with job queue support
-            application = (
-                Application.builder()
-                .token(self.token)
-                .build()
-            )
+            # Create application WITHOUT job queue to avoid conflicts
+            application = Application.builder().token(self.token).build()
             
             self.setup_handlers(application)
-            
-            # Add job queue for dynamic features if available
-            if hasattr(application, 'job_queue') and application.job_queue:
-                application.job_queue.run_repeating(self.update_analytics, interval=300, first=10)
             
             print("🚀 Dynamic RAGnosis Bot Started!")
             print("🎯 Features: AI Analysis • Analytics • Dynamic Menus • User Sessions")
@@ -739,42 +725,44 @@ class DynamicRagnosisBot:
             # Start polling with error handling
             await application.run_polling(
                 drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES
+                allowed_updates=Update.ALL_TYPES,
+                close_loop=False  # Important: Don't close the event loop
             )
             
         except Exception as e:
             logger.error(f"Bot run error: {e}")
             print(f"❌ Bot failed to start: {e}")
-            # Re-raise to see the actual error in logs
             raise
 
-# ===== RAILWAY COMPATIBLE ENTRY POINT =====
-async def main():
-    """Main entry point for Railway"""
+# ===== SIMPLE RAILWAY ENTRY POINT =====
+def main():
+    """Main entry point for Railway - SIMPLIFIED"""
     try:
         # Validate environment variables
         if not os.getenv("TELEGRAM_BOT_TOKEN"):
-            print("❌ TELEGRAM_BOT_TOKEN not found in environment variables!")
-            print("💡 Please add it to Railway environment variables")
+            print("❌ TELEGRAM_BOT_TOKEN not found!")
             return
         
         if not os.getenv("GEMINI_API_KEY"):
-            print("❌ GEMINI_API_KEY not found in environment variables!")
-            print("💡 Please add it to Railway environment variables")
+            print("❌ GEMINI_API_KEY not found!")
             return
         
         print("✅ Environment variables validated successfully")
         print("🤖 Initializing RAGnosis Bot...")
         
+        # Create and run bot
         bot = DynamicRagnosisBot()
-        await bot.run()
+        
+        # Run the bot
+        asyncio.run(bot.run())
         
     except Exception as e:
         print(f"❌ Critical error: {e}")
-        # Keep the process alive for Railway to see the error
         print("💤 Process will stay alive for debugging...")
-        await asyncio.sleep(3600)  # Sleep for 1 hour
+        # Keep process alive but don't use asyncio.sleep
+        import time
+        time.sleep(3600)  # Sleep for 1 hour
 
 # Railway entry point
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
