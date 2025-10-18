@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 🤖 RAGnosis AI - Advanced Medical Diagnostic Assistant
-AI-powered medical bot with Gemini AI integration and chat-based diagnosis
+Fixed chat-based diagnosis with proper conversation handling
 """
 
 import os
@@ -45,7 +45,7 @@ wiki_wiki = wikipediaapi.Wikipedia(
 )
 
 # Conversation states
-CHAT_DIAGNOSIS, DETAILS = range(2)
+CHAT_DIAGNOSIS = 1
 
 class RagnosisAI:
     def __init__(self):
@@ -69,50 +69,62 @@ class RagnosisAI:
         except:
             return text[:400] + "..." if len(text) > 400 else text
 
-    async def get_ai_chat_diagnosis(self, user_message: str, chat_history: List, user_context: Dict) -> str:
-        """AI-powered chat-based diagnosis using Gemini"""
+    async def get_ai_chat_response(self, user_message: str, chat_history: List, user_context: Dict) -> str:
+        """AI-powered chat response using conversation context"""
         
-        # Build conversation context
-        history_text = "\n".join([f"User: {msg['user']}\nAI: {msg['ai']}" for msg in chat_history[-6:]])
+        # Build conversation context for Gemini
+        conversation_context = ""
+        if chat_history:
+            conversation_context = "Previous conversation:\n"
+            for msg in chat_history[-4:]:  # Last 4 exchanges for context
+                conversation_context += f"User: {msg['user']}\n"
+                conversation_context += f"AI: {msg['ai']}\n\n"
         
         prompt = f"""
         You are RAGnosis AI, a friendly and empathetic medical AI assistant. You're having a conversational diagnosis chat with a user.
 
         USER CONTEXT:
-        {user_context.get('medical_context', 'No prior context')}
+        Age: {user_context.get('age', 'Not specified')}
+        Gender: {user_context.get('gender', 'Not specified')}
+        Medical Background: {user_context.get('medical_context', 'No prior context')}
 
-        RECENT CONVERSATION:
-        {history_text}
-
+        {conversation_context}
+        
         USER'S LATEST MESSAGE:
-        {user_message}
+        "{user_message}"
 
-        Provide a SHORT, FRIENDLY response that:
-        - 🩺 Acknowledges their concern
-        - 🔍 Asks 1-2 relevant follow-up questions 
-        - 💡 Offers brief, practical insight
-        - 😊 Uses empathetic tone with emojis
-        - 🎯 Keeps response under 150 words
+        Provide a natural, conversational response that:
+        - 🩺 Shows empathy and understanding
+        - 🔍 Asks relevant follow-up questions to gather more information
+        - 💡 Offers brief, practical medical insights
+        - 😊 Uses warm, friendly tone with appropriate emojis
+        - 🎯 Keeps response concise (2-4 sentences)
 
-        Remember: You're having a conversation, not writing a medical report. Be warm, engaging, and helpful.
+        Remember: You're having a flowing conversation. Build on previous messages and guide the user toward better understanding their symptoms.
+
+        Current conversation flow: Symptom discussion -> Detailed questioning -> Analysis -> Recommendations
         """
-
+        
         try:
             response = gemini_model.generate_content(prompt)
             return response.text.strip()
         except Exception as e:
-            return "🤖 I'm here to help! Could you tell me more about what you're experiencing? 😊"
+            return "🤖 I'm here to listen! Could you tell me more about what you're experiencing? 😊"
 
     async def get_comprehensive_analysis(self, chat_history: List, user_context: Dict) -> str:
         """Generate final comprehensive analysis using Gemini"""
         
-        conversation_summary = "\n".join([f"- {msg['user']}" for msg in chat_history])
+        if not chat_history:
+            return "💬 Please chat with me about your symptoms first so I can provide a proper analysis! 🩺"
+        
+        # Extract all user messages for analysis
+        user_symptoms = "\n".join([f"- {msg['user']}" for msg in chat_history if 'user' in msg])
         
         prompt = f"""
-        Based on this entire conversation, provide a COMPREHENSIVE but CONCISE medical analysis:
+        Based on this entire health conversation, provide a COMPREHENSIVE but CONCISE medical analysis:
 
-        CONVERSATION SUMMARY:
-        {conversation_summary}
+        USER'S REPORTED SYMPTOMS:
+        {user_symptoms}
 
         USER CONTEXT:
         Age: {user_context.get('age', 'Not specified')}
@@ -121,26 +133,39 @@ class RagnosisAI:
         Provide analysis in this EXACT format:
 
         🎯 **Quick Assessment**
-        [2-3 line summary]
+        [2-3 line empathetic summary]
 
-        🔍 **Likely Possibilities** 
-        • [Condition 1] - [Brief reason]
-        • [Condition 2] - [Brief reason]
+        🔍 **Possible Considerations** 
+        • [Condition 1] - [Brief medical reasoning]
+        • [Condition 2] - [Brief medical reasoning]
 
         ⚠️ **When to Seek Help**
-        [Specific warning signs]
+        [Specific warning signs to watch for]
 
-        💡 **Next Steps**
+        💡 **Recommended Next Steps**
         [2-3 actionable recommendations]
 
-        Keep it UNDER 400 words total. Be empathetic but professional.
+        Keep it UNDER 300 words total. Be empathetic but professional. Use simple language with emojis.
         """
 
         try:
             response = gemini_model.generate_content(prompt)
-            return await self.get_gemini_summary(response.text, 350)
+            return response.text.strip()
         except:
-            return "🩺 Based on our chat, I recommend consulting a healthcare provider for proper evaluation. Your symptoms deserve professional attention! 💫"
+            return """🩺 **Based on our conversation, here's my assessment:**
+
+🎯 **Quick Assessment**
+I've reviewed your symptoms and recommend professional medical consultation for proper evaluation.
+
+⚠️ **When to Seek Help**
+- Symptoms worsening or not improving
+- New concerning symptoms develop
+- Difficulty with daily activities
+
+💡 **Recommended Next Steps**
+1. Schedule appointment with healthcare provider
+2. Monitor symptoms closely
+3. Follow up if condition changes"""
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Interactive AI-powered start"""
@@ -166,16 +191,18 @@ Your **AI Health Companion** for:
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
         await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        return ConversationHandler.END
 
     async def start_chat_diagnosis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start conversational diagnosis"""
         user_id = update.effective_user.id
         
-        # Initialize chat session
+        # Initialize or reset chat session
         self.user_sessions[user_id] = {
             'age': 'Not specified',
             'gender': 'Not specified', 
-            'medical_context': 'New conversation started'
+            'medical_context': 'New conversation started',
+            'chat_start_time': datetime.now()
         }
         self.chat_history[user_id] = []
         
@@ -195,10 +222,15 @@ Your **AI Health Companion** for:
 
 **Just start typing - tell me what's going on!** 😊
 
-Type `🏠 Main Menu` anytime to return.
+Type `🏠 Main Menu` anytime to return or `📊 Get Analysis` when ready for full report.
         """
         
-        await update.message.reply_text(welcome_msg, parse_mode='Markdown')
+        keyboard = [
+            [KeyboardButton("📊 Get Analysis"), KeyboardButton("🏠 Main Menu")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(welcome_msg, reply_markup=reply_markup, parse_mode='Markdown')
         return CHAT_DIAGNOSIS
 
     async def handle_chat_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,68 +238,99 @@ Type `🏠 Main Menu` anytime to return.
         user_id = update.effective_user.id
         user_message = update.message.text
         
+        # Check if user wants to end chat
         if user_message == "🏠 Main Menu":
-            await self.start_command(update, context)
+            await self.end_chat_session(update, user_id)
             return ConversationHandler.END
             
-        if user_message == "📊 Get Analysis Report":
-            # Generate comprehensive analysis
-            if user_id in self.chat_history and len(self.chat_history[user_id]) > 2:
-                await update.message.reply_text("🧠 **Generating your AI analysis...**")
-                
-                analysis = await self.get_comprehensive_analysis(
-                    self.chat_history[user_id], 
-                    self.user_sessions[user_id]
-                )
-                
-                await update.message.reply_text(f"📋 **Your AI Health Analysis**\n\n{analysis}", parse_mode='Markdown')
-                
-                # Offer next steps
-                next_keyboard = [
-                    [KeyboardButton("🗣️ Continue Chat"), KeyboardButton("🎯 New Analysis")],
-                    [KeyboardButton("🩺 First Aid"), KeyboardButton("🏠 Main Menu")]
-                ]
-                reply_markup = ReplyKeyboardMarkup(next_keyboard, resize_keyboard=True)
-                
-                await update.message.reply_text(
-                    "🔄 **What would you like to do next?**",
-                    reply_markup=reply_markup
-                )
-                return ConversationHandler.END
-            else:
-                await update.message.reply_text("💬 **Please chat with me a bit more so I can provide a better analysis!**")
-                return CHAT_DIAGNOSIS
-
-        # Store user message
+        # Check if user wants analysis report
+        if user_message == "📊 Get Analysis":
+            return await self.generate_analysis_report(update, user_id)
+        
+        # Initialize chat history if not exists
         if user_id not in self.chat_history:
             self.chat_history[user_id] = []
-            
-        # Get AI response
+        
+        # Show typing action
         await update.message.reply_chat_action("typing")
-        ai_response = await self.get_ai_chat_diagnosis(
+        await asyncio.sleep(1)  # Simulate thinking
+        
+        # Get AI response based on conversation context
+        ai_response = await self.get_ai_chat_response(
             user_message, 
             self.chat_history[user_id],
-            self.user_sessions[user_id]
+            self.user_sessions.get(user_id, {})
         )
         
         # Store conversation
         self.chat_history[user_id].append({
             'user': user_message,
-            'ai': ai_response
+            'ai': ai_response,
+            'timestamp': datetime.now()
         })
         
-        # Add quick actions after a few messages
-        if len(self.chat_history[user_id]) >= 3:
-            quick_keyboard = [
-                [KeyboardButton("📊 Get Analysis Report"), KeyboardButton("🗣️ Continue Chat")],
-                [KeyboardButton("🩺 First Aid"), KeyboardButton("🏠 Main Menu")]
-            ]
-            reply_markup = ReplyKeyboardMarkup(quick_keyboard, resize_keyboard=True)
-            await update.message.reply_text(ai_response, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(ai_response, parse_mode='Markdown')
+        # Create response keyboard
+        keyboard = [
+            [KeyboardButton("📊 Get Analysis"), KeyboardButton("🗣️ Continue Chat")],
+            [KeyboardButton("🩺 First Aid"), KeyboardButton("🏠 Main Menu")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        # Send AI response
+        await update.message.reply_text(ai_response, reply_markup=reply_markup, parse_mode='Markdown')
         
         return CHAT_DIAGNOSIS
+
+    async def generate_analysis_report(self, update: Update, user_id: int):
+        """Generate and send comprehensive analysis report"""
+        if user_id not in self.chat_history or len(self.chat_history[user_id]) < 1:
+            await update.message.reply_text(
+                "💬 **Please chat with me about your symptoms first so I can provide a proper analysis!** 🩺"
+            )
+            return CHAT_DIAGNOSIS
+        
+        await update.message.reply_chat_action("typing")
+        await asyncio.sleep(2)  # Simulate analysis time
+        
+        # Generate comprehensive analysis
+        analysis = await self.get_comprehensive_analysis(
+            self.chat_history[user_id], 
+            self.user_sessions.get(user_id, {})
+        )
+        
+        # Send analysis
+        await update.message.reply_text(
+            f"📋 **Your AI Health Analysis Report** 📊\n\n{analysis}",
+            parse_mode='Markdown'
+        )
+        
+        # Offer next steps
+        next_keyboard = [
+            [KeyboardButton("🗣️ New Chat"), KeyboardButton("🎯 Quick Analysis")],
+            [KeyboardButton("🩺 First Aid"), KeyboardButton("🏠 Main Menu")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(next_keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            "🔄 **What would you like to do next?**",
+            reply_markup=reply_markup
+        )
+        
+        # Clear chat history for this session
+        if user_id in self.chat_history:
+            self.chat_history[user_id] = []
+        
+        return ConversationHandler.END
+
+    async def end_chat_session(self, update: Update, user_id: int):
+        """Properly end chat session"""
+        if user_id in self.chat_history:
+            self.chat_history[user_id] = []
+        
+        await update.message.reply_text(
+            "🔄 **Chat session ended.** Ready for your next health inquiry! 💫",
+            reply_markup=ReplyKeyboardMarkup([["🏠 Main Menu"]], resize_keyboard=True)
+        )
 
     async def quick_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Quick symptom analysis"""
@@ -295,27 +358,52 @@ Type `🏠 Main Menu` anytime to return.
             await self.start_command(update, context)
             return
             
+        if user_input == "🔍 Other Symptoms":
+            await update.message.reply_text(
+                "💬 **Please describe your symptoms in your own words:**\n\n"
+                "Example: 'I have been having stomach pain and fever for 2 days'"
+            )
+            return
+            
         # Use Gemini for quick analysis
         prompt = f"""
         Provide a QUICK, CONCISE medical insight for someone experiencing: {user_input}
         
         Format your response:
-        🎯 **Quick Insight** [1-2 lines]
-        💡 **Suggestions** [2-3 bullet points]
-        ⚠️ **Watch For** [1-2 warning signs]
+        🎯 **Quick Insight** [1-2 lines summary]
+        💡 **Suggestions** [2-3 practical tips]
+        ⚠️ **Watch For** [1-2 specific warning signs]
         
-        Keep it under 150 words. Use simple language with emojis.
+        Keep it under 150 words. Use simple language with emojis. Be empathetic.
         """
         
         await update.message.reply_chat_action("typing")
+        await asyncio.sleep(1)
+        
         try:
             response = gemini_model.generate_content(prompt)
             analysis = response.text.strip()
         except:
-            analysis = "🩺 Based on your symptoms, I recommend monitoring closely and consulting a healthcare provider if symptoms persist or worsen. 💫"
+            analysis = """🩺 **Quick Insight**
+Based on your symptoms, monitoring is recommended.
+
+💡 **Suggestions**
+• Rest and hydrate well
+• Monitor symptom changes
+
+⚠️ **Watch For**
+• Worsening symptoms
+• Difficulty breathing"""
+
+        keyboard = [
+            [KeyboardButton("🗣️ Chat Diagnosis"), KeyboardButton("🎯 New Analysis")],
+            [KeyboardButton("🏠 Main Menu")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
         await update.message.reply_text(
             f"🔍 **Quick Analysis for {user_input}**\n\n{analysis}",
+            reply_markup=reply_markup,
             parse_mode='Markdown'
         )
 
@@ -431,7 +519,7 @@ Type `🏠 Main Menu` anytime to return.
         text = update.message.text
         
         if text == "🗣️ Chat Diagnosis":
-            await self.start_chat_diagnosis(update, context)
+            return await self.start_chat_diagnosis(update, context)
         elif text == "🎯 Quick Analysis":
             await self.quick_analysis(update, context)
         elif text == "🩺 First Aid":
@@ -451,42 +539,58 @@ Type `🏠 Main Menu` anytime to return.
         elif text in ["🦠 COVID-19 Info", "😷 Flu Guide", "💓 Heart Health", "🩸 Diabetes",
                      "🧠 Mental Health", "🍽️ Nutrition"]:
             await self.handle_wikipedia_search(update, context)
+        elif text in ["🗣️ Continue Chat", "🗣️ New Chat"]:
+            await self.start_chat_diagnosis(update, context)
+        elif text == "🎯 New Analysis":
+            await self.quick_analysis(update, context)
         elif text == "🏠 Main Menu":
             await self.start_command(update, context)
         else:
-            # Default response for unexpected messages
-            await update.message.reply_text(
-                "🤖 **RAGnosis AI** - Your Health Companion!\n\n"
-                "Choose an option below or type /start to see all features! 💫",
-                parse_mode='Markdown'
-            )
+            # If we're in conversation mode, handle as chat message
+            if context.user_data and 'conversation' in context.user_data:
+                return await self.handle_chat_message(update, context)
+            else:
+                # Default response for unexpected messages
+                await update.message.reply_text(
+                    "🤖 **RAGnosis AI** - Your Health Companion!\n\n"
+                    "Choose an option below or try `🗣️ Chat Diagnosis` to talk about symptoms! 💫",
+                    parse_mode='Markdown'
+                )
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Cancel conversation"""
-        await update.message.reply_text(
-            "🔄 Chat ended. Ready for your next health inquiry! 💫",
-            reply_markup=ReplyKeyboardMarkup([["🏠 Main Menu"]], resize_keyboard=True)
-        )
+        user_id = update.effective_user.id
+        await self.end_chat_session(update, user_id)
         return ConversationHandler.END
 
 def main():
-    """Start the enhanced RAGnosis AI"""
-    print("🚀 Starting Enhanced RAGnosis AI...")
+    """Start the fixed RAGnosis AI"""
+    print("🚀 Starting Fixed RAGnosis AI with Chat Functionality...")
     
     ragnosis_ai = RagnosisAI()
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Conversation handler for chat diagnosis
+    # Conversation handler for chat diagnosis - FIXED
     conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex('^🗣️ Chat Diagnosis$'), ragnosis_ai.start_chat_diagnosis)
+            MessageHandler(filters.Regex('^🗣️ Chat Diagnosis$'), ragnosis_ai.start_chat_diagnosis),
+            MessageHandler(filters.Regex('^🗣️ New Chat$'), ragnosis_ai.start_chat_diagnosis),
+            MessageHandler(filters.Regex('^🗣️ Continue Chat$'), ragnosis_ai.start_chat_diagnosis)
         ],
         states={
             CHAT_DIAGNOSIS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_chat_message)
-            ]
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, 
+                    ragnosis_ai.handle_chat_message
+                )
+            ],
         },
-        fallbacks=[MessageHandler(filters.Regex('^🏠 Main Menu$'), ragnosis_ai.cancel)]
+        fallbacks=[
+            CommandHandler('cancel', ragnosis_ai.cancel),
+            MessageHandler(filters.Regex('^🏠 Main Menu$'), ragnosis_ai.cancel),
+            MessageHandler(filters.Regex('^📊 Get Analysis$'), ragnosis_ai.handle_chat_message)
+        ],
+        allow_reentry=True
     )
     
     # Add handlers
@@ -494,8 +598,8 @@ def main():
     application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_message))
     
-    print("✅ Enhanced RAGnosis AI ready!")
-    print("🤖 Features: Chat Diagnosis + Quick Analysis + Gemini AI")
+    print("✅ Fixed RAGnosis AI ready!")
+    print("🤖 Chat functionality now working properly!")
     
     try:
         application.run_polling(drop_pending_updates=True)
