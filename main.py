@@ -735,6 +735,51 @@ class DynamicRagnosisBot:
 
 # Start the dynamic bot
 async def main():
+
+    # ===== RAILWAY DEPLOYMENT SETUP =====
+
+import sys
+import uvicorn
+from fastapi import FastAPI
+
+# Create a simple health check server
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"status": "RAGnosis Bot is running!", "timestamp": datetime.now().isoformat()}
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy", 
+        "bot": "RAGnosis",
+        "active_users": len(bot.user_sessions) if 'bot' in locals() else 0
+    }
+
+def run_fastapi():
+    """Run FastAPI server for health checks"""
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+async def run_bot_and_server():
+    """Run both Telegram bot and health check server"""
+    # Start health check server in background
+    import threading
+    server_thread = threading.Thread(target=run_fastapi, daemon=True)
+    server_thread.start()
+    
+    # Start Telegram bot
+    bot = DynamicRagnosisBot()
+    await bot.run()
+
+# Railway entry point
+if __name__ == "__main__":
+    # Check if we should run the full bot or just health checks
+    if len(sys.argv) > 1 and sys.argv[1] == "health":
+        run_fastapi()
+    else:
+        asyncio.run(run_bot_and_server())
+        
     try:
         # Check environment variables
         if not os.getenv("TELEGRAM_BOT_TOKEN"):
