@@ -584,7 +584,7 @@ class DynamicRagnosisBot:
         try:
             user_id = update.effective_user.id
             
-            # Simple admin check - replace with your Telegram ID
+            # Simple admin check
             if user_id == 5757538431:  
                 cursor = self.conn.cursor()
                 
