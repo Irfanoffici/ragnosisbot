@@ -1,10 +1,5 @@
-fastapi
-uvicorn
-chromadb
-sentence-transformers
-python-multipart
-python-dotenv
 python-telegram-bot
 google-generativeai
+python-dotenv
 aiohttp
 requests
