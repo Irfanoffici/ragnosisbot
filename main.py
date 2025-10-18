@@ -710,11 +710,10 @@ class DynamicRagnosisBot:
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_dynamic_message))
 
     async def run(self):
-        """Run the dynamic bot"""
+        """Run the dynamic bot - SIMPLIFIED VERSION"""
         try:
-            # Create application WITHOUT job queue to avoid conflicts
+            # Create application
             application = Application.builder().token(self.token).build()
-            
             self.setup_handlers(application)
             
             print("🚀 Dynamic RAGnosis Bot Started!")
@@ -722,57 +721,44 @@ class DynamicRagnosisBot:
             print("🔧 Running on Railway")
             print("📱 Bot is live and waiting for messages...")
             
-            # Start polling with proper event loop handling
-            await application.run_polling(
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES
-            )
+            # Start polling - this will run forever until stopped
+            await application.run_polling()
             
         except Exception as e:
             logger.error(f"Bot run error: {e}")
-            print(f"❌ Bot failed to start: {e}")
-            raise
+            print(f"❌ Bot failed: {e}")
+            # Don't re-raise, just let it crash naturally
 
-# ===== RAILWAY COMPATIBLE ENTRY POINT =====
+# ===== ULTRA SIMPLE ENTRY POINT =====
 def main():
-    """Main entry point for Railway"""
+    """Main entry point - ULTRA SIMPLE"""
+    print("🤖 Starting RAGnosis Bot...")
+    
+    # Validate environment variables
+    if not os.getenv("TELEGRAM_BOT_TOKEN"):
+        print("❌ TELEGRAM_BOT_TOKEN not found!")
+        return
+    
+    if not os.getenv("GEMINI_API_KEY"):
+        print("❌ GEMINI_API_KEY not found!")
+        return
+    
+    print("✅ Environment variables validated")
+    
     try:
-        # Validate environment variables
-        if not os.getenv("TELEGRAM_BOT_TOKEN"):
-            print("❌ TELEGRAM_BOT_TOKEN not found!")
-            return
-        
-        if not os.getenv("GEMINI_API_KEY"):
-            print("❌ GEMINI_API_KEY not found!")
-            return
-        
-        print("✅ Environment variables validated successfully")
-        print("🤖 Initializing RAGnosis Bot...")
-        
-        # Create bot instance
+        # Create and run bot
         bot = DynamicRagnosisBot()
         
-        # Use asyncio.run() but handle Railway's event loop properly
-        try:
-            asyncio.run(bot.run())
-        except RuntimeError as e:
-            if "already running" in str(e):
-                # Railway already has an event loop - use different approach
-                print("🔄 Using existing event loop...")
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Create task in existing loop
-                    loop.create_task(bot.run())
-                else:
-                    loop.run_until_complete(bot.run())
-            else:
-                raise
+        # Run the bot - this will block until stopped
+        asyncio.run(bot.run())
         
     except Exception as e:
-        print(f"❌ Critical error: {e}")
+        print(f"❌ Bot crashed: {e}")
         print("💤 Process will stay alive for debugging...")
+        # Keep process alive
         import time
-        time.sleep(3600)  # Sleep for 1 hour
+        while True:
+            time.sleep(60)
 
 # Railway entry point
 if __name__ == "__main__":
