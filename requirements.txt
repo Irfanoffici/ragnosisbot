@@ -1,6 +1,10 @@
-python-telegram-bot==20.7
+python-telegram-bot
 google-generativeai
 python-dotenv
 aiohttp
 wikipedia-api
 requests
+urllib3
+httpx
+asyncio-throttle
+pydantic
