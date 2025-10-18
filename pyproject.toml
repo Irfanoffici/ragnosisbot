@@ -1,0 +1,7 @@
+[project]
+dependencies = [
+    "python-telegram-bot>=20.7",
+    "google-generativeai",
+    "python-dotenv",
+    "aiohttp",
+]
