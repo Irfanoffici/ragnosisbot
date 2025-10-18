@@ -722,11 +722,10 @@ class DynamicRagnosisBot:
             print("🔧 Running on Railway")
             print("📱 Bot is live and waiting for messages...")
             
-            # Start polling with error handling
+            # Start polling with proper event loop handling
             await application.run_polling(
                 drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES,
-                close_loop=False  # Important: Don't close the event loop
+                allowed_updates=Update.ALL_TYPES
             )
             
         except Exception as e:
@@ -734,9 +733,9 @@ class DynamicRagnosisBot:
             print(f"❌ Bot failed to start: {e}")
             raise
 
-# ===== SIMPLE RAILWAY ENTRY POINT =====
+# ===== RAILWAY COMPATIBLE ENTRY POINT =====
 def main():
-    """Main entry point for Railway - SIMPLIFIED"""
+    """Main entry point for Railway"""
     try:
         # Validate environment variables
         if not os.getenv("TELEGRAM_BOT_TOKEN"):
@@ -750,16 +749,28 @@ def main():
         print("✅ Environment variables validated successfully")
         print("🤖 Initializing RAGnosis Bot...")
         
-        # Create and run bot
+        # Create bot instance
         bot = DynamicRagnosisBot()
         
-        # Run the bot
-        asyncio.run(bot.run())
+        # Use asyncio.run() but handle Railway's event loop properly
+        try:
+            asyncio.run(bot.run())
+        except RuntimeError as e:
+            if "already running" in str(e):
+                # Railway already has an event loop - use different approach
+                print("🔄 Using existing event loop...")
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Create task in existing loop
+                    loop.create_task(bot.run())
+                else:
+                    loop.run_until_complete(bot.run())
+            else:
+                raise
         
     except Exception as e:
         print(f"❌ Critical error: {e}")
         print("💤 Process will stay alive for debugging...")
-        # Keep process alive but don't use asyncio.sleep
         import time
         time.sleep(3600)  # Sleep for 1 hour
 
