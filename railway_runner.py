@@ -4,7 +4,6 @@ import os
 import logging
 from main import DynamicRagnosisBot
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -19,12 +18,14 @@ async def main():
         if not os.getenv("GEMINI_API_KEY"):
             raise ValueError("GEMINI_API_KEY not found!")
         
+        print("✅ Environment variables loaded successfully")
         bot = DynamicRagnosisBot()
         await bot.run()
         
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        # Keep the process alive for Railway to see the error
+        logger.error(f"❌ Bot failed: {e}")
+        # Keep process alive so Railway shows the error
+        print("🔄 Bot crashed, keeping process alive for debugging...")
         while True:
             await asyncio.sleep(60)
 
