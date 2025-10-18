@@ -1,1 +1,1 @@
-worker: python main.py --stop-existing
+worker: python main.py
