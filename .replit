@@ -1,0 +1,14 @@
+# .replit
+run = "python main.py"
+language = "python3"
+entrypoint = "main.py"
+
+[packages]
+python-telegram-bot = "20.7"
+google-generativeai = "0.3.2"
+python-dotenv = "1.0.0"
+aiohttp = "3.9.1"
+
+[env]
+TELEGRAM_BOT_TOKEN = "8172256362:AAEIES-oFqjn6no7-sZu3EooNhSm8z31tTk"
+GEMINI_API_KEY = "AIzaSyAqAp5_60wxyspiLM0XnX3LBj6hY3GBBHc"
