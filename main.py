@@ -710,9 +710,9 @@ class DynamicRagnosisBot:
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_dynamic_message))
 
     async def run_bot(self):
-        """Run the bot with proper error handling"""
+        """Run the bot with SIMPLE polling"""
         try:
-            # Create application
+            # Create application with basic configuration
             application = Application.builder().token(self.token).build()
             self.setup_handlers(application)
             
@@ -721,20 +721,16 @@ class DynamicRagnosisBot:
             print("🔧 Running on Railway")
             print("📱 Bot is live and waiting for messages...")
             
-            # Start polling with proper cleanup
-            await application.run_polling(
-                drop_pending_updates=True,
-                close_loop=False,  # Don't close the event loop
-                stop_signals=None  # Don't handle stop signals
-            )
+            # SIMPLE polling - no complex parameters
+            await application.run_polling()
             
         except Exception as e:
             logger.error(f"Bot run error: {e}")
             print(f"❌ Bot failed: {e}")
 
-# ===== SIMPLE ROBUST ENTRY POINT =====
-async def main_async():
-    """Main async entry point"""
+# ===== ULTRA SIMPLE ENTRY POINT =====
+def main():
+    """Main entry point - ULTRA SIMPLE"""
     print("🤖 Starting RAGnosis Bot...")
     
     # Validate environment variables
@@ -748,26 +744,15 @@ async def main_async():
     
     print("✅ Environment variables validated")
     
+    # Create and run bot
+    bot = DynamicRagnosisBot()
+    
+    # Run the bot with basic asyncio
     try:
-        # Create and run bot
-        bot = DynamicRagnosisBot()
-        await bot.run_bot()
-        
+        asyncio.run(bot.run_bot())
     except Exception as e:
         print(f"❌ Bot crashed: {e}")
-        # Don't try to recover, just let it restart
-
-def main():
-    """Main entry point - handles asyncio properly"""
-    try:
-        # Run the async main function
-        asyncio.run(main_async())
-    except KeyboardInterrupt:
-        print("Bot stopped by user")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-    finally:
-        print("Bot process ended")
+        print("🔄 Process will restart automatically...")
 
 # Railway entry point
 if __name__ == "__main__":
