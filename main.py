@@ -37,14 +37,16 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.FileHandler('ragnosis.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 # Configure Gemini
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable is required")
+genai.configure(api_key=GEMINI_API_KEY)
 
 # Dynamic conversation states
 class ConversationState:
@@ -70,7 +72,7 @@ class DynamicRagnosisBot:
     def __init__(self):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         if not self.token:
-            raise ValueError("TELEGRAM_BOT_TOKEN not found in environment variables")
+            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
         
         self.gemini_model = genai.GenerativeModel('gemini-pro')
         
@@ -181,8 +183,8 @@ class DynamicRagnosisBot:
 🔬 *Welcome to RAGnosis - Your Dynamic AI Medical Assistant*
 
 📊 *Live Stats:*
-• 🧑‍🤝‍🧑 {self.analytics['total_users']} users helped today
-• 🔍 {self.analytics['sessions_today']} sessions active
+• 🧑‍🤝‍🧑 {self.analytics['total_users']} users helped
+• 🔍 {self.analytics['sessions_today']} sessions today
 • 💡 Always learning & improving
 
 🎯 *How can I assist you today?*
@@ -582,8 +584,8 @@ class DynamicRagnosisBot:
         try:
             user_id = update.effective_user.id
             
-            # Simple admin check
-            if user_id == 123456789:  # Replace with your Telegram ID
+            # Simple admin check - replace with your Telegram ID
+            if user_id == 5757538431:  
                 cursor = self.conn.cursor()
                 
                 total_users = cursor.execute('SELECT COUNT(*) FROM user_sessions').fetchone()[0]
@@ -600,16 +602,16 @@ class DynamicRagnosisBot:
                 ''').fetchall()
                 
                 analytics_text = f"""
-    📊 *RAGnosis Analytics*
+📊 *RAGnosis Analytics*
 
-    👥 Users: {total_users}
-    📈 Sessions Today: {today_sessions}
-    🔄 Active Conversations: {self.analytics['active_conversations']}
+👥 Users: {total_users}
+📈 Sessions Today: {today_sessions}
+🔄 Active Conversations: {self.analytics['active_conversations']}
 
-    🏥 Top Symptoms:
-    {chr(10).join([f'• {symptom}: {count}' for symptom, count in common_symptoms])}
+🏥 Top Symptoms:
+{chr(10).join([f'• {symptom}: {count}' for symptom, count in common_symptoms])}
 
-    🕒 Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+🕒 Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
                 """
                 
                 await update.message.reply_text(analytics_text, parse_mode='Markdown')
@@ -716,41 +718,63 @@ class DynamicRagnosisBot:
     async def run(self):
         """Run the dynamic bot"""
         try:
-            application = Application.builder().token(self.token).build()
+            # Create application with job queue support
+            application = (
+                Application.builder()
+                .token(self.token)
+                .build()
+            )
+            
             self.setup_handlers(application)
             
-            # Add job queue for dynamic features
-            job_queue = application.job_queue
-            if job_queue:
-                job_queue.run_repeating(self.update_analytics, interval=300, first=10)
+            # Add job queue for dynamic features if available
+            if hasattr(application, 'job_queue') and application.job_queue:
+                application.job_queue.run_repeating(self.update_analytics, interval=300, first=10)
             
             print("🚀 Dynamic RAGnosis Bot Started!")
             print("🎯 Features: AI Analysis • Analytics • Dynamic Menus • User Sessions")
-            print("🔧 Running on Replit")
+            print("🔧 Running on Railway")
+            print("📱 Bot is live and waiting for messages...")
             
-            await application.run_polling()
+            # Start polling with error handling
+            await application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES
+            )
+            
         except Exception as e:
             logger.error(f"Bot run error: {e}")
-            print(f"❌ Failed to start bot: {e}")
+            print(f"❌ Bot failed to start: {e}")
+            # Re-raise to see the actual error in logs
+            raise
 
-# Start the dynamic bot
+# ===== RAILWAY COMPATIBLE ENTRY POINT =====
 async def main():
+    """Main entry point for Railway"""
     try:
-        # Check environment variables
+        # Validate environment variables
         if not os.getenv("TELEGRAM_BOT_TOKEN"):
             print("❌ TELEGRAM_BOT_TOKEN not found in environment variables!")
-            print("💡 Please add it to Replit Secrets (lock icon)")
+            print("💡 Please add it to Railway environment variables")
             return
         
         if not os.getenv("GEMINI_API_KEY"):
             print("❌ GEMINI_API_KEY not found in environment variables!")
-            print("💡 Please add it to Replit Secrets (lock icon)")
+            print("💡 Please add it to Railway environment variables")
             return
+        
+        print("✅ Environment variables validated successfully")
+        print("🤖 Initializing RAGnosis Bot...")
         
         bot = DynamicRagnosisBot()
         await bot.run()
+        
     except Exception as e:
         print(f"❌ Critical error: {e}")
+        # Keep the process alive for Railway to see the error
+        print("💤 Process will stay alive for debugging...")
+        await asyncio.sleep(3600)  # Sleep for 1 hour
 
+# Railway entry point
 if __name__ == "__main__":
     asyncio.run(main())
