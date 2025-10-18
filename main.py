@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
 RAGnosis Bot - AI Medical Assistant
-A fully functional Telegram bot for symptom analysis
+Fully functional Telegram bot without SQLite
 """
 
 import os
-import logging
 import asyncio
 import random
 from datetime import datetime
 from typing import Dict, List
-import sqlite3
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, 
@@ -26,23 +24,16 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
 # Configure Gemini AI
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    print("❌ ERROR: GEMINI_API_KEY not found in environment variables!")
+    print("❌ ERROR: GEMINI_API_KEY not found!")
     print("💡 Add it to Railway Secrets")
     exit(1)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
-    print("❌ ERROR: TELEGRAM_BOT_TOKEN not found in environment variables!")
+    print("❌ ERROR: TELEGRAM_BOT_TOKEN not found!")
     print("💡 Add it to Railway Secrets")
     exit(1)
 
@@ -75,41 +66,21 @@ class MedicalBot:
     def __init__(self):
         self.gemini_model = genai.GenerativeModel('gemini-pro')
         self.user_sessions: Dict[int, Dict] = {}
-        self.setup_database()
-        print("✅ Medical Bot initialized successfully!")
-
-    def setup_database(self):
-        """Setup SQLite database for user analytics"""
-        try:
-            self.conn = sqlite3.connect('medical_bot.db', check_same_thread=False)
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    usage_count INTEGER DEFAULT 0,
-                    last_used TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            self.conn.commit()
-            print("✅ Database setup completed!")
-        except Exception as e:
-            print(f"❌ Database error: {e}")
+        self.user_stats: Dict[int, Dict] = {}  # Simple in-memory storage
+        print("✅ RAGnosis Bot initialized successfully!")
 
     def log_usage(self, user_id: int, username: str, first_name: str):
-        """Log user activity"""
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO users 
-                (user_id, username, first_name, usage_count, last_used)
-                VALUES (?, ?, ?, COALESCE((SELECT usage_count FROM users WHERE user_id = ?), 0) + 1, ?)
-            ''', (user_id, username, first_name, user_id, datetime.now()))
-            self.conn.commit()
-        except Exception as e:
-            print(f"Logging error: {e}")
+        """Simple usage logging without database"""
+        if user_id not in self.user_stats:
+            self.user_stats[user_id] = {
+                'username': username,
+                'first_name': first_name,
+                'usage_count': 0,
+                'last_used': datetime.now().isoformat()
+            }
+        
+        self.user_stats[user_id]['usage_count'] += 1
+        self.user_stats[user_id]['last_used'] = datetime.now().isoformat()
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
@@ -384,32 +355,23 @@ When finished, click *✅ Done Selecting*
     async def handle_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show user statistics"""
         user = update.effective_user
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(
-                'SELECT usage_count, last_used FROM users WHERE user_id = ?', 
-                (user.id,)
-            )
-            result = cursor.fetchone()
-            
-            if result:
-                usage_count, last_used = result
-                stats_text = f"""
+        user_id = user.id
+        
+        if user_id in self.user_stats:
+            stats = self.user_stats[user_id]
+            stats_text = f"""
 📊 *Your RAGnosis Stats*
 
 👤 User: {user.first_name}
-📈 Sessions: {usage_count}
-🕒 Last Used: {last_used[:16] if last_used else 'Never'}
+📈 Sessions: {stats['usage_count']}
+🕒 Last Used: {stats['last_used'][:16]}
 
 Thank you for using RAGnosis! 🎉
-                """
-            else:
-                stats_text = "📊 No usage data found. Start using the bot to see your stats!"
-                
-            await update.message.reply_text(stats_text, parse_mode='Markdown')
+            """
+        else:
+            stats_text = "📊 No usage data found. Start using the bot to see your stats!"
             
-        except Exception as e:
-            await update.message.reply_text("❌ Could not load statistics.")
+        await update.message.reply_text(stats_text, parse_mode='Markdown')
 
     async def handle_emergency(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Emergency help information"""
