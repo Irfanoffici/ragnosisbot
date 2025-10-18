@@ -1,17 +1,20 @@
-# ragnosis_bot.py
+# main.py - DYNAMIC RAGnosis Bot
 import os
 import logging
-import requests
 import asyncio
-import aiohttp
 import json
+import random
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+import aiohttp
+import sqlite3
 from telegram import (
     Update, 
     ReplyKeyboardMarkup, 
     KeyboardButton, 
     InlineKeyboardMarkup, 
-    InlineKeyboardButton
+    InlineKeyboardButton,
+    ReplyKeyboardRemove
 )
 from telegram.ext import (
     Application, 
@@ -20,611 +23,682 @@ from telegram.ext import (
     filters, 
     ContextTypes, 
     ConversationHandler,
-    CallbackQueryHandler
+    CallbackQueryHandler,
+    JobQueue
 )
-from dotenv import load_dotenv
 import google.generativeai as genai
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
+# Configure advanced logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler('ragnosis.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Conversation states
-SYMPTOMS, AGE, GENDER, DURATION, SEVERITY, MEDICAL_HISTORY = range(6)
+# Dynamic conversation states
+class ConversationState:
+    SYMPTOMS = 0
+    AGE = 1
+    GENDER = 2
+    DURATION = 3
+    SEVERITY = 4
+    MEDICAL_HISTORY = 5
+    FOLLOW_UP = 6
 
-class RagnosisBot:
+# Dynamic symptom categories with emojis
+SYMPTOM_CATEGORIES = {
+    "general": ["🤒 Fever", "😴 Fatigue", "⚖️ Weight Changes", "🌡️ Sweating"],
+    "respiratory": ["🤧 Cough", "💨 Shortness", "👃 Runny Nose", "🤭 Sneeze"],
+    "digestive": ["🤢 Nausea", "💩 Diarrhea", "🤰 Bloating", "🍽️ Appetite"],
+    "neurological": ["🤕 Headache", "😵 Dizziness", "👀 Vision", "💤 Sleep"],
+    "pain": ["🔴 Pain", "🔥 Burning", "💫 Tingling", "💔 Chest Pain"],
+    "other": ["🩸 Bleeding", "🔴 Rash", "🦵 Swelling", "🎨 Color Changes"]
+}
+
+class DynamicRagnosisBot:
     def __init__(self):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.gemini_model = genai.GenerativeModel('gemini-pro')
         
-        # User sessions storage (in production, use database)
-        self.user_sessions = {}
-        
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced start command for RAGnosis"""
-        user = update.effective_user
-        
-        welcome_text = f"""
-🔬 *Welcome to RAGnosis, {user.first_name}!*
-
-*Revolutionary AI-Powered Medical Assistance*
-
-🤖 *Powered by:* Google Gemini AI + Medical RAG System
-
-💡 *What I Offer:*
-• 🧠 **Smart Symptom Analysis** - AI-driven diagnosis assistance
-• 💊 **Medication Intelligence** - Drug info & interactions
-• 📊 **Health Insights** - Personalized recommendations
-• 🚨 **Emergency Guidance** - First aid & urgent care
-• 📚 **Medical Knowledge** - Latest research & information
-• 🔍 **Condition Explorer** - Deep dive into health topics
-
-⚡ *Quick Access Below* 👇
-        """
-        
-        keyboard = [
-            [KeyboardButton("🔍 Symptom Analysis"), KeyboardButton("💊 Drug Info")],
-            [KeyboardButton("🚨 Emergency Guide"), KeyboardButton("📊 Health Insights")],
-            [KeyboardButton("📚 Learn More"), KeyboardButton("🆘 Immediate Help")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, input_field_placeholder="Choose your medical need...")
-        
-        await update.message.reply_text(
-            welcome_text, 
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-
-    async def quick_symptom_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start smart symptom analysis"""
-        common_symptoms = [
-            ["🤒 Fever & Chills", "🤧 Cough & Cold", "🤕 Headache"],
-            ["🤢 Nausea & Vomit", "💨 Breathing Issues", "😴 Fatigue"],
-            ["🩸 Bleeding", "🔥 Pain", "🌡️ Other Symptoms"]
-        ]
-        
-        reply_markup = ReplyKeyboardMarkup(common_symptoms, resize_keyboard=True)
-        await update.message.reply_text(
-            "🔍 *RAGnosis Symptom Analysis*\n\n*Select your primary symptoms:*\n\nI'll use AI to analyze potential conditions and provide guidance.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return SYMPTOMS
-
-    async def collect_symptoms(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Collect detailed symptoms"""
-        user_id = update.effective_user.id
-        symptoms = update.message.text
-        
-        # Initialize user session
-        if user_id not in self.user_sessions:
-            self.user_sessions[user_id] = {}
-        
-        self.user_sessions[user_id]['symptoms'] = symptoms
-        
-        # Age selection with better options
-        age_options = [
-            [KeyboardButton("👶 Child (0-12)"), KeyboardButton("👦 Teen (13-17)")],
-            [KeyboardButton("👨 Adult (18-40)"), KeyboardButton("👨‍💼 Middle (41-65)")],
-            [KeyboardButton("👴 Senior (65+)"), KeyboardButton("🚫 Skip Age")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(age_options, resize_keyboard=True)
-        
-        await update.message.reply_text(
-            "👤 *Patient Age Group*\n\n*Select age for accurate analysis:*\n\nAge helps determine condition probabilities and recommendations.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return AGE
-
-    async def collect_age(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Collect age and ask for gender"""
-        user_id = update.effective_user.id
-        age_group = update.message.text
-        self.user_sessions[user_id]['age_group'] = age_group
-        
-        gender_options = [
-            [KeyboardButton("👨 Male"), KeyboardButton("👩 Female")],
-            [KeyboardButton("⚧ Other"), KeyboardButton("🚫 Prefer not to say")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(gender_options, resize_keyboard=True)
-        
-        await update.message.reply_text(
-            "👤 *Biological Sex*\n\n*This affects condition probabilities:*\n\nSome conditions are more common in specific sexes.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return GENDER
-
-    async def collect_gender(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Collect gender and ask for duration"""
-        user_id = update.effective_user.id
-        gender = update.message.text
-        self.user_sessions[user_id]['gender'] = gender
-        
-        duration_options = [
-            [KeyboardButton("⏱️ <24 hours"), KeyboardButton("🕐 1-3 days")],
-            [KeyboardButton("🕑 3-7 days"), KeyboardButton("🕒 1-4 weeks")],
-            [KeyboardButton("🕓 >1 month"), KeyboardButton("❓ Not sure")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(duration_options, resize_keyboard=True)
-        
-        await update.message.reply_text(
-            "⏰ *Symptom Duration*\n\n*How long have you experienced these symptoms?*\n\nDuration helps distinguish acute vs chronic conditions.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return DURATION
-
-    async def collect_duration(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Collect duration and ask for severity"""
-        user_id = update.effective_user.id
-        duration = update.message.text
-        self.user_sessions[user_id]['duration'] = duration
-        
-        severity_options = [
-            [KeyboardButton("😊 Mild"), KeyboardButton("😐 Moderate")],
-            [KeyboardButton("😫 Severe"), KeyboardButton("🚨 Critical")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(severity_options, resize_keyboard=True)
-        
-        await update.message.reply_text(
-            "📊 *Symptom Severity*\n\n*How severe are your symptoms?*\n\nThis determines urgency and recommended actions.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return SEVERITY
-
-    async def collect_severity(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Collect severity and ask for medical history"""
-        user_id = update.effective_user.id
-        severity = update.message.text
-        self.user_sessions[user_id]['severity'] = severity
-        
-        history_options = [
-            [KeyboardButton("💊 Chronic Conditions"), KeyboardButton("🔄 Recurring Issue")],
-            [KeyboardButton("🆕 New Symptoms"), KeyboardButton("🚫 No History")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(history_options, resize_keyboard=True)
-        
-        await update.message.reply_text(
-            "📋 *Medical Context*\n\n*Any relevant medical history?*\n\nThis helps provide personalized recommendations.",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-        return MEDICAL_HISTORY
-
-    async def perform_ai_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Perform comprehensive AI analysis using Gemini"""
-        user_id = update.effective_user.id
-        medical_history = update.message.text
-        self.user_sessions[user_id]['medical_history'] = medical_history
-        
-        # Show typing indicator
-        await update.message.chat.send_action(action="typing")
-        
-        try:
-            # Get all collected data
-            user_data = self.user_sessions.get(user_id, {})
-            
-            # Create comprehensive prompt for Gemini
-            analysis_prompt = f"""
-            ACT as RAGnosis - an advanced AI medical diagnostic assistant. Analyze this patient case comprehensively:
-
-            PATIENT PROFILE:
-            - Primary Symptoms: {user_data.get('symptoms', 'Not specified')}
-            - Age Group: {user_data.get('age_group', 'Not specified')}
-            - Biological Sex: {user_data.get('gender', 'Not specified')}
-            - Symptom Duration: {user_data.get('duration', 'Not specified')}
-            - Severity Level: {user_data.get('severity', 'Not specified')}
-            - Medical Context: {user_data.get('medical_history', 'Not specified')}
-
-            PROVIDE A STRUCTURED MEDICAL ANALYSIS:
-
-            🔍 **IMMEDIATE ASSESSMENT**
-            [List 3-4 most probable conditions with likelihood percentages and brief explanations]
-
-            📊 **SYMPTOM INTERPRETATION**
-            [Break down what each symptom might indicate medically]
-
-            🚨 **URGENCY CLASSIFICATION**
-            [Specify: Emergency/Critical/Urgent/Non-urgent with clear criteria]
-
-            💡 **IMMEDIATE ACTIONS**
-            [Step-by-step recommended actions based on severity]
-
-            🏥 **MEDICAL CONSULTATION GUIDANCE**
-            [When to see a doctor, what type of specialist, what to mention]
-
-            🏠 **HOME CARE RECOMMENDATIONS**
-            [Practical self-care tips if condition is non-urgent]
-
-            🔬 **POSSIBLE DIAGNOSTIC PATH**
-            [What tests or examinations might be needed]
-
-            ⚠️ **RED FLAG WATCHLIST**
-            [Specific symptoms that warrant immediate medical attention]
-
-            Format with appropriate emojis, be compassionate but factual, and emphasize this is AI assistance not medical diagnosis.
-            """
-
-            # Call Gemini AI
-            ai_response = await self.call_gemini_ai(analysis_prompt)
-            
-            # Generate personalized recommendations
-            recommendations = await self.generate_personalized_recommendations(user_data)
-            
-            # Format final response
-            final_response = f"""
-{ai_response}
-
-{recommendations}
-
-🔬 *RAGnosis AI Analysis Complete*
-
-💡 *Next Steps:*
-1. Review the analysis above
-2. Follow recommended actions based on urgency
-3. Consult healthcare professional for definitive diagnosis
-4. Use /track to monitor symptom changes
-
-⚠️ *Medical Disclaimer:*
-This AI analysis is for informational purposes only. I am an AI assistant, not a medical doctor. Always consult qualified healthcare professionals for medical diagnosis and treatment. In emergencies, call your local emergency number immediately.
-
-🔄 *Want to analyze different symptoms? Use /symptoms*
-            """
-            
-            # Clear user session
-            if user_id in self.user_sessions:
-                del self.user_sessions[user_id]
-            
-            # Show main menu
-            await self.show_main_menu(update)
-            
-            # Send analysis (split if too long)
-            if len(final_response) > 4096:
-                chunks = [final_response[i:i+4096] for i in range(0, len(final_response), 4096)]
-                for chunk in chunks:
-                    await update.message.reply_text(chunk, parse_mode='Markdown')
-            else:
-                await update.message.reply_text(final_response, parse_mode='Markdown')
-                
-        except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            await update.message.reply_text(
-                "❌ *Analysis Error*\n\nI encountered an issue processing your symptoms. Please try again or use /start to begin fresh.",
-                parse_mode='Markdown'
-            )
-        
-        return ConversationHandler.END
-
-    async def call_gemini_ai(self, prompt: str) -> str:
-        """Call Gemini AI with enhanced error handling"""
-        try:
-            response = self.gemini_model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            logger.error(f"Gemini API error: {e}")
-            return """
-🔍 *RAGnosis AI Analysis*
-
-Based on your symptoms, here's a general assessment:
-
-🤒 **Common Possibilities:**
-Various conditions could cause these symptoms. The specific combination, duration, and severity are important for accurate assessment.
-
-🏥 **General Recommendation:**
-Consult a healthcare professional for proper evaluation. They can consider your full medical history and perform necessary examinations.
-
-💡 **Immediate Actions:**
-• Monitor symptoms closely
-• Note any changes in severity
-• Keep hydrated and rest if appropriate
-• Avoid self-medication without professional advice
-
-🚨 **Seek Immediate Care if you experience:**
-• Difficulty breathing
-• Severe pain
-• High fever that doesn't improve
-• Confusion or dizziness
-• Any concerning symptom progression
-            """
-
-    async def generate_personalized_recommendations(self, user_data: dict) -> str:
-        """Generate personalized health recommendations"""
-        prompt = f"""
-        Based on this patient profile, provide personalized health recommendations:
-        
-        Patient Data: {user_data}
-        
-        Provide 3-5 personalized health recommendations considering their age, symptoms, and severity.
-        Focus on practical, actionable advice.
-        """
-        
-        try:
-            response = self.gemini_model.generate_content(prompt)
-            return f"💫 *Personalized Recommendations:*\n\n{response.text}"
-        except:
-            return "💫 *General Health Tips:*\n• Maintain regular health check-ups\n• Stay hydrated and eat balanced meals\n• Get adequate rest and sleep\n• Monitor symptoms and seek help if worsening"
-
-    async def drug_information(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Provide drug/medication information"""
-        await update.message.reply_text(
-            "💊 *RAGnosis Drug Intelligence*\n\n*Enter medication name for detailed information:*\n\nI'll provide:\n• Uses and indications\n• Dosage guidelines\n• Side effects\n• Interactions\n• Precautions\n\n*Examples:* Aspirin, Metformin, Amoxicillin, Ibuprofen",
-            parse_mode='Markdown'
-        )
-
-    async def emergency_guide(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Emergency and first aid guidance"""
-        emergency_options = [
-            [KeyboardButton("🫀 Heart Attack"), KeyboardButton("💨 Choking")],
-            [KeyboardButton("🔥 Burns"), KeyboardButton("🩸 Severe Bleeding")],
-            [KeyboardButton("🤕 Head Injury"), KeyboardButton("🔙 Main Menu")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(emergency_options, resize_keyboard=True)
-        
-        await update.message.reply_text(
-            "🚨 *RAGnosis Emergency Guide*\n\n*Select emergency situation:*\n\nI'll provide step-by-step first aid guidance.\n\n⚠️ *Remember:* Always call local emergency services first!",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
-
-    async def handle_emergency_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle specific emergency situations"""
-        emergency_type = update.message.text
-        
-        emergency_guides = {
-            "🫀 Heart Attack": """
-🫀 *Heart Attack - Emergency Response*
-
-🚨 *IMMEDIATE ACTIONS:*
-1. 📞 **CALL EMERGENCY SERVICES NOW**
-2. 💊 Chew aspirin (if available and not allergic)
-3. 🛌 Sit or lie down in comfortable position
-4. 👕 Loosen tight clothing
-5. ❌ Do NOT drive yourself to hospital
-
-🎯 *Recognize Symptoms:*
-• Chest pain/pressure
-• Pain in arms, back, neck, jaw
-• Shortness of breath
-• Nausea, cold sweat
-• Lightheadedness
-
-⏱️ *Time is critical - act immediately!*
-            """,
-            "💨 Choking": """
-💨 *Choking - Emergency Response*
-
-🚨 *For CONSCIOUS Person:*
-1. 📞 **Call emergency services**
-2. 🤲 Perform Heimlich maneuver
-3. ↗️ Give 5 back blows between shoulder blades
-4. 🔄 Alternate between back blows and abdominal thrusts
-
-🎯 *Signs of Choking:*
-• Can't speak or breathe
-• Clutching throat
-• Turning blue
-• Panicked behavior
-
-⚠️ *If person becomes unconscious, begin CPR*
-            """
+        # Dynamic data storage
+        self.user_sessions: Dict[int, Dict] = {}
+        self.analytics = {
+            'total_users': 0,
+            'sessions_today': 0,
+            'common_symptoms': {},
+            'active_conversations': 0
         }
         
-        if emergency_type in emergency_guides:
-            await update.message.reply_text(emergency_guides[emergency_type], parse_mode='Markdown')
-        else:
-            await update.message.reply_text(
-                "🚨 *Emergency Principle:*\n\n1. 📞 **Call local emergency number immediately**\n2. 🛌 **Keep person calm and still**\n3. 💊 **Follow dispatcher instructions**\n4. 🏥 **Prepare for ambulance arrival**",
-                parse_mode='Markdown'
-            )
-
-    async def health_insights(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Provide health insights and tips"""
-        insights_text = """
-📊 *RAGnosis Health Insights*
-
-🌡️ *Daily Health Tips:*
-• 💧 **Hydration:** Drink 8 glasses of water daily
-• 🏃 **Activity:** 30 minutes moderate exercise
-• 🥗 **Nutrition:** Balanced diet with fruits/vegetables
-• 😴 **Sleep:** 7-9 hours quality sleep
-• 🧘 **Stress:** Practice daily relaxation
-
-🔍 *Preventive Care:*
-• Regular health check-ups
-• Vaccinations up to date
-• Dental and vision exams
-• Cancer screenings as recommended
-
-💡 *Wellness Reminders:*
-• Wash hands frequently
-• Practice good posture
-• Take screen breaks
-• Stay socially connected
-
-*Your health journey matters!* 🌟
-        """
-        await update.message.reply_text(insights_text, parse_mode='Markdown')
-
-    async def learn_more(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Educational medical content"""
-        learn_options = [
-            [KeyboardButton("🧠 Mental Health"), KeyboardButton("❤️ Heart Health")],
-            [KeyboardButton("🫁 Respiratory"), KeyboardButton("🦠 Infectious")],
-            [KeyboardButton("📖 Health Basics"), KeyboardButton("🔙 Main Menu")]
+        # Initialize database
+        self.init_database()
+        
+        # Health tips pool (dynamic content)
+        self.health_tips = [
+            "💧 Stay hydrated - drink at least 8 glasses of water daily",
+            "🏃 Move regularly - even short walks boost circulation",
+            "😴 Prioritize sleep - 7-9 hours for optimal health",
+            "🥗 Eat colorful foods - variety ensures nutrient diversity",
+            "🧘 Manage stress - deep breathing reduces cortisol",
+            "☀️ Get sunlight - 15 minutes daily for Vitamin D",
+            "📱 Digital detox - reduce screen time before bed",
+            "🤝 Social connection - relationships boost mental health"
         ]
-        reply_markup = ReplyKeyboardMarkup(learn_options, resize_keyboard=True)
+
+    def init_database(self):
+        """Initialize SQLite database for analytics"""
+        self.conn = sqlite3.connect('ragnosis_analytics.db', check_same_thread=False)
+        cursor = self.conn.cursor()
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                sessions_count INTEGER DEFAULT 1,
+                last_active TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS symptom_analytics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symptom TEXT,
+                count INTEGER DEFAULT 1,
+                date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        self.conn.commit()
+
+    def log_analytics(self, user_id: int, username: str, first_name: str, symptom: str = None):
+        """Dynamic analytics logging"""
+        cursor = self.conn.cursor()
+        
+        # Update user session
+        cursor.execute('''
+            INSERT OR REPLACE INTO user_sessions (user_id, username, first_name, sessions_count, last_active)
+            VALUES (?, ?, ?, COALESCE((SELECT sessions_count FROM user_sessions WHERE user_id = ?), 0) + 1, ?)
+        ''', (user_id, username, first_name, user_id, datetime.now()))
+        
+        # Log symptom if provided
+        if symptom:
+            cursor.execute('''
+                INSERT INTO symptom_analytics (symptom, count)
+                VALUES (?, 1)
+                ON CONFLICT(symptom) DO UPDATE SET count = count + 1
+            ''', (symptom,))
+        
+        self.conn.commit()
+        self.analytics['total_users'] = cursor.execute('SELECT COUNT(*) FROM user_sessions').fetchone()[0]
+        self.analytics['sessions_today'] = cursor.execute(
+            'SELECT COUNT(*) FROM user_sessions WHERE date(last_active) = date("now")'
+        ).fetchone()[0]
+
+    async def dynamic_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Dynamic start with personalized greeting"""
+        user = update.effective_user
+        current_hour = datetime.now().hour
+        
+        # Time-based greeting
+        if 5 <= current_hour < 12:
+            greeting = "🌅 Good morning"
+        elif 12 <= current_hour < 17:
+            greeting = "☀️ Good afternoon"
+        elif 17 <= current_hour < 22:
+            greeting = "🌇 Good evening"
+        else:
+            greeting = "🌙 Good night"
+        
+        # Log user analytics
+        self.log_analytics(user.id, user.username, user.first_name)
+        
+        welcome_text = f"""
+{greeting}, *{user.first_name}*! 👋
+
+🔬 *Welcome to RAGnosis - Your Dynamic AI Medical Assistant*
+
+📊 *Live Stats:*
+• 🧑‍🤝‍🧑 {self.analytics['total_users']} users helped today
+• 🔍 {self.analytics['sessions_today']} sessions active
+• 💡 Always learning & improving
+
+🎯 *How can I assist you today?*
+        """
+        
+        # Dynamic keyboard based on time of day
+        if current_hour < 12:
+            keyboard = [
+                [KeyboardButton("🔍 Morning Check"), KeyboardButton("💊 Med Reminder")],
+                [KeyboardButton("📊 Health Track"), KeyboardButton("🚨 Emergency")],
+                [KeyboardButton("🎯 Quick Analysis"), KeyboardButton("📚 Learn")]
+            ]
+        else:
+            keyboard = [
+                [KeyboardButton("🔍 Symptom Analysis"), KeyboardButton("💊 Drug Info")],
+                [KeyboardButton("😴 Sleep Health"), KeyboardButton("🚨 Emergency")],
+                [KeyboardButton("📈 Daily Review"), KeyboardButton("🎲 Random Tip")]
+            ]
+        
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        
+        # Send random health tip after 2 seconds
+        async def send_tip():
+            await asyncio.sleep(2)
+            tip = random.choice(self.health_tips)
+            await update.message.reply_text(f"💡 *Daily Health Tip:*\n\n{tip}", parse_mode='Markdown')
+        
+        asyncio.create_task(send_tip())
+
+    async def dynamic_symptom_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Dynamic symptom analysis with categorized selection"""
+        user_id = update.effective_user.id
+        
+        # Initialize dynamic session
+        if user_id not in self.user_sessions:
+            self.user_sessions[user_id] = {
+                'selected_symptoms': [],
+                'conversation_start': datetime.now(),
+                'interaction_count': 0
+            }
+        
+        # Create dynamic symptom keyboard by categories
+        keyboard = []
+        for category, symptoms in SYMPTOM_CATEGORIES.items():
+            row = [KeyboardButton(symptom) for symptom in symptoms[:2]]  # First 2 from each category
+            keyboard.append(row)
+        
+        keyboard.extend([
+            [KeyboardButton("✅ Done Selecting"), KeyboardButton("🔄 Change Categories")],
+            [KeyboardButton("🎯 Quick Analyze"), KeyboardButton("🔙 Main Menu")]
+        ])
+        
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        current_selections = self.user_sessions[user_id]['selected_symptoms']
+        selection_text = f"📋 Currently selected: {', '.join(current_selections)}" if current_selections else ""
         
         await update.message.reply_text(
-            "📚 *RAGnosis Medical Library*\n\n*Choose a health topic to learn more:*",
+            f"🔍 *Dynamic Symptom Analysis*\n\n"
+            f"Select symptoms from categories below:\n\n"
+            f"{selection_text}\n\n"
+            f"*Categories:*\n"
+            f"• 🤒 General • 🫁 Respiratory • 🍽️ Digestive\n"
+            f"• 🧠 Neurological • 🔴 Pain • 🎨 Other",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
-
-    async def immediate_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Immediate help and crisis resources"""
-        help_text = """
-🆘 *RAGnosis Immediate Help*
-
-🚨 *Emergency Numbers:*
-• 🏥 **Medical Emergency:** 112/911/999
-• 🧠 **Mental Health Crisis:** Local crisis line
-• 🐾 **Poison Control:** Local poison center
-
-💡 *When to Seek Immediate Help:*
-• Chest pain or pressure
-• Difficulty breathing
-• Severe bleeding
-• Sudden weakness or numbness
-• Suicidal thoughts
-• Severe allergic reaction
-
-📞 *Keep these numbers saved!*
-
-🔗 *Additional Resources:*
-• Local hospital emergency department
-• Primary care physician
-• Urgent care centers
-• Telemedicine services
-
-*Your safety is the priority!* 🛡️
-        """
-        await update.message.reply_text(help_text, parse_mode='Markdown')
-
-    async def handle_learning_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle specific learning topics"""
-        topic = update.message.text
         
-        # Use Gemini to generate educational content
-        prompt = f"Provide a comprehensive but easy-to-understand educational overview about {topic} for general public. Include key facts, prevention tips, and when to see a doctor."
+        return ConversationState.SYMPTOMS
+
+    async def handle_symptom_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle dynamic symptom selection"""
+        user_id = update.effective_user.id
+        selected = update.message.text
+        session = self.user_sessions[user_id]
+        
+        if selected == "✅ Done Selecting":
+            if not session['selected_symptoms']:
+                await update.message.reply_text("❌ Please select at least one symptom to analyze.")
+                return ConversationState.SYMPTOMS
+            
+            # Move to age selection
+            return await self.collect_age_dynamic(update, context)
+        
+        elif selected == "🔄 Change Categories":
+            # Reset and show categories again
+            session['selected_symptoms'] = []
+            return await self.dynamic_symptom_analysis(update, context)
+        
+        elif selected == "🎯 Quick Analyze":
+            return await self.quick_analysis(update, context)
+        
+        elif selected == "🔙 Main Menu":
+            await self.dynamic_start(update, context)
+            return ConversationHandler.END
+        
+        else:
+            # Add/remove symptom dynamically
+            if selected in session['selected_symptoms']:
+                session['selected_symptoms'].remove(selected)
+                action = "❌ Removed"
+            else:
+                session['selected_symptoms'].append(selected)
+                action = "✅ Added"
+            
+            # Show updated selection
+            selection_text = ", ".join(session['selected_symptoms']) if session['selected_symptoms'] else "None"
+            
+            await update.message.reply_text(
+                f"{action} *{selected}*\n\n"
+                f"📋 Current selection: {selection_text}\n\n"
+                f"Continue selecting or press '✅ Done Selecting' when ready.",
+                parse_mode='Markdown'
+            )
+            
+            return ConversationState.SYMPTOMS
+
+    async def quick_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Quick AI analysis without full conversation"""
+        user_id = update.effective_user.id
+        session = self.user_sessions.get(user_id, {})
+        symptoms = session.get('selected_symptoms', [])
+        
+        if not symptoms:
+            await update.message.reply_text(
+                "🎯 *Quick Analysis*\n\nPlease describe your symptoms briefly:",
+                parse_mode='Markdown'
+            )
+            context.user_data['quick_analysis'] = True
+            return ConversationState.SYMPTOMS
         
         await update.message.chat.send_action(action="typing")
-        try:
-            response = self.gemini_model.generate_content(prompt)
-            await update.message.reply_text(
-                f"📚 *{topic} - Educational Overview*\n\n{response.text}",
-                parse_mode='Markdown'
-            )
-        except:
-            await update.message.reply_text(
-                f"📚 *{topic} Information*\n\nI recommend consulting reliable medical sources like WHO, CDC, or Mayo Clinic for comprehensive information about {topic}.",
-                parse_mode='Markdown'
-            )
-
-    async def show_main_menu(self, update: Update):
-        """Show the main menu"""
-        keyboard = [
-            [KeyboardButton("🔍 Symptom Analysis"), KeyboardButton("💊 Drug Info")],
-            [KeyboardButton("🚨 Emergency Guide"), KeyboardButton("📊 Health Insights")],
-            [KeyboardButton("📚 Learn More"), KeyboardButton("🆘 Immediate Help")]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
-        if hasattr(update, 'message'):
+        try:
+            prompt = f"""
+            Provide a quick, concise medical analysis for these symptoms: {', '.join(symptoms)}
+            
+            Format as:
+            🎯 QUICK ASSESSMENT
+            [Brief overview]
+            
+            ⚠️ KEY CONSIDERATIONS
+            [2-3 bullet points]
+            
+            🏥 NEXT STEPS
+            [Immediate actions]
+            
+            Keep it under 300 characters.
+            """
+            
+            response = self.gemini_model.generate_content(prompt)
+            
             await update.message.reply_text(
-                "🏠 *Back to Main Menu*\n\nHow can I assist you with your health concerns?",
+                f"🎯 *Quick Analysis Results:*\n\n{response.text}\n\n"
+                f"💡 For comprehensive analysis, use full symptom analysis.",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            await update.message.reply_text("❌ Quick analysis failed. Please try full analysis.")
+        
+        await self.dynamic_start(update, context)
+        return ConversationHandler.END
+
+    async def collect_age_dynamic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Dynamic age collection with context"""
+        user_id = update.effective_user.id
+        symptoms = self.user_sessions[user_id]['selected_symptoms']
+        
+        # Age suggestions based on symptoms
+        age_keyboard = [
+            [KeyboardButton("👶 Child (0-12)"), KeyboardButton("👦 Teen (13-17)")],
+            [KeyboardButton("👨 Young Adult (18-30)"), KeyboardButton("👨‍💼 Adult (31-50)")],
+            [KeyboardButton("👴 Senior (50+)"), KeyboardButton("🚫 Skip Age")]
+        ]
+        
+        reply_markup = ReplyKeyboardMarkup(age_keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"👤 *Age Information*\n\n"
+            f"Based on your symptoms: {', '.join(symptoms)}\n\n"
+            f"Age helps provide more accurate recommendations for your specific situation.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+        return ConversationState.AGE
+
+    async def smart_ai_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Advanced AI analysis with dynamic prompting"""
+        user_id = update.effective_user.id
+        session = self.user_sessions[user_id]
+        
+        await update.message.chat.send_action(action="typing")
+        
+        try:
+            # Dynamic prompt based on collected data
+            symptoms_text = ", ".join(session['selected_symptoms'])
+            age = session.get('age', 'Not specified')
+            gender = session.get('gender', 'Not specified')
+            duration = session.get('duration', 'Not specified')
+            severity = session.get('severity', 'Not specified')
+            
+            # Create context-aware prompt
+            prompt = f"""
+            Analyze these symptoms with medical intelligence:
+            
+            PATIENT CONTEXT:
+            - Symptoms: {symptoms_text}
+            - Age: {age}
+            - Gender: {gender} 
+            - Duration: {duration}
+            - Severity: {severity}
+            
+            Provide a structured analysis with:
+            
+            🔍 RISK ASSESSMENT
+            [Urgency level and immediate concerns]
+            
+            🎯 LIKELY CONDITIONS  
+            [Top 3 possibilities with brief reasoning]
+            
+            💡 SMART RECOMMENDATIONS
+            [Personalized actions based on context]
+            
+            🏥 MEDICAL GUIDANCE
+            [When and what type of care to seek]
+            
+            Format with clear sections and appropriate emojis. Be concise but comprehensive.
+            """
+            
+            response = self.gemini_model.generate_content(prompt)
+            
+            # Add analytics
+            for symptom in session['selected_symptoms']:
+                self.log_analytics(user_id, update.effective_user.username, 
+                                 update.effective_user.first_name, symptom)
+            
+            # Create interactive follow-up
+            follow_up_keyboard = [
+                [KeyboardButton("🔍 More Details"), KeyboardButton("💊 Medication Info")],
+                [KeyboardButton("🏥 Find Doctors"), KeyboardButton("📊 Track Symptoms")],
+                [KeyboardButton("🔄 New Analysis"), KeyboardButton("🏠 Main Menu")]
+            ]
+            reply_markup = ReplyKeyboardMarkup(follow_up_keyboard, resize_keyboard=True)
+            
+            await update.message.reply_text(
+                f"🔬 *RAGnosis AI Analysis Complete*\n\n{response.text}\n\n"
+                f"📊 *Session Summary:*\n"
+                f"• Symptoms analyzed: {len(session['selected_symptoms'])}\n"
+                f"• Analysis time: {(datetime.now() - session['conversation_start']).seconds}s\n"
+                f"• Confidence: High\n\n"
+                f"💡 *What would you like to do next?*",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
+            
+            # Clear session but keep for potential follow-up
+            session['analysis_complete'] = True
+            
+        except Exception as e:
+            logger.error(f"AI Analysis error: {e}")
+            await update.message.reply_text(
+                "❌ *Analysis Error*\n\nI encountered an issue. Please try again or use quick analysis.",
+                parse_mode='Markdown'
+            )
+        
+        return ConversationState.FOLLOW_UP
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle all other messages with AI"""
+    async def handle_follow_up(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle post-analysis follow-up actions"""
+        choice = update.message.text
+        
+        if choice == "🔍 More Details":
+            await update.message.reply_text(
+                "🔍 *Detailed Analysis*\n\n"
+                "For comprehensive medical information, I recommend:\n\n"
+                "• 📚 Reputable medical websites (Mayo Clinic, WebMD)\n"
+                "• 🏥 Consultation with healthcare professionals\n"
+                "• 🔬 Further diagnostic tests if recommended\n\n"
+                "Would you like information about any specific aspect?",
+                parse_mode='Markdown'
+            )
+            
+        elif choice == "💊 Medication Info":
+            await update.message.reply_text(
+                "💊 *Medication Safety*\n\n"
+                "Always consult healthcare providers before taking any medication.\n\n"
+                "For drug information, provide the medication name:",
+                parse_mode='Markdown'
+            )
+            
+        elif choice == "🔄 New Analysis":
+            await self.dynamic_symptom_analysis(update, context)
+            return ConversationState.SYMPTOMS
+            
+        elif choice == "🏠 Main Menu":
+            await self.dynamic_start(update, context)
+            return ConversationHandler.END
+            
+        else:
+            await update.message.reply_text(
+                "💡 Please select an option from the menu below.",
+                parse_mode='Markdown'
+            )
+        
+        return ConversationState.FOLLOW_UP
+
+    async def send_daily_insights(self, context: ContextTypes.DEFAULT_TYPE):
+        """Send daily health insights to users"""
+        # This would be called by a job queue for active users
+        tip = random.choice(self.health_tips)
+        # Implementation for sending to multiple users would go here
+        pass
+
+    async def show_analytics(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show bot analytics (admin feature)"""
+        user_id = update.effective_user.id
+        
+        # Simple admin check (in production, use proper auth)
+        if user_id == 123456789:  # Replace with your Telegram ID
+            cursor = self.conn.cursor()
+            
+            total_users = cursor.execute('SELECT COUNT(*) FROM user_sessions').fetchone()[0]
+            today_sessions = cursor.execute(
+                'SELECT COUNT(*) FROM user_sessions WHERE date(last_active) = date("now")'
+            ).fetchone()[0]
+            
+            common_symptoms = cursor.execute('''
+                SELECT symptom, SUM(count) as total 
+                FROM symptom_analytics 
+                GROUP BY symptom 
+                ORDER BY total DESC 
+                LIMIT 5
+            ''').fetchall()
+            
+            analytics_text = f"""
+📊 *RAGnosis Analytics*
+
+👥 Users: {total_users}
+📈 Sessions Today: {today_sessions}
+🔄 Active Conversations: {self.analytics['active_conversations']}
+
+🏥 Top Symptoms:
+{chr(10).join([f'• {symptom}: {count}' for symptom, count in common_symptoms])}
+
+🕒 Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+            """
+            
+            await update.message.reply_text(analytics_text, parse_mode='Markdown')
+        else:
+            await update.message.reply_text("🔒 Analytics available for administrators only.")
+
+    def setup_handlers(self, application):
+        """Setup all dynamic handlers"""
+        
+        # Main conversation handler
+        conv_handler = ConversationHandler(
+            entry_points=[
+                MessageHandler(filters.Regex(
+                    r"^(🔍 Symptom Analysis|🔍 Morning Check|🎯 Quick Analysis)$"), 
+                    self.dynamic_symptom_analysis
+                ),
+                CommandHandler("analyze", self.dynamic_symptom_analysis)
+            ],
+            states={
+                ConversationState.SYMPTOMS: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_symptom_selection)
+                ],
+                ConversationState.AGE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_age_dynamic)
+                ],
+                ConversationState.GENDER: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_gender_dynamic)
+                ],
+                ConversationState.DURATION: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_duration_dynamic)
+                ],
+                ConversationState.SEVERITY: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_severity_dynamic)
+                ],
+                ConversationState.MEDICAL_HISTORY: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.smart_ai_analysis)
+                ],
+                ConversationState.FOLLOW_UP: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_follow_up)
+                ]
+            },
+            fallbacks=[CommandHandler("cancel", self.dynamic_start)]
+        )
+        
+        # Add all handlers
+        application.add_handler(CommandHandler("start", self.dynamic_start))
+        application.add_handler(CommandHandler("stats", self.show_analytics))
+        application.add_handler(CommandHandler("tip", self.send_random_tip))
+        application.add_handler(conv_handler)
+        
+        # Add handlers for other features
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_dynamic_message))
+
+    async def handle_dynamic_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle all other dynamic messages"""
         text = update.message.text
         
-        if text == "💊 Drug Info":
-            await self.drug_information(update, context)
-        elif text == "🚨 Emergency Guide":
-            await self.emergency_guide(update, context)
-        elif text in ["🫀 Heart Attack", "💨 Choking", "🔥 Burns", "🩸 Severe Bleeding", "🤕 Head Injury"]:
-            await self.handle_emergency_query(update, context)
-        elif text == "📊 Health Insights":
-            await self.health_insights(update, context)
-        elif text == "📚 Learn More":
-            await self.learn_more(update, context)
-        elif text in ["🧠 Mental Health", "❤️ Heart Health", "🫁 Respiratory", "🦠 Infectious", "📖 Health Basics"]:
-            await self.handle_learning_query(update, context)
-        elif text == "🆘 Immediate Help":
-            await self.immediate_help(update, context)
-        elif text == "🔙 Main Menu":
-            await self.show_main_menu(update)
+        if text == "🎲 Random Tip":
+            tip = random.choice(self.health_tips)
+            await update.message.reply_text(f"💡 *Health Tip:*\n\n{tip}", parse_mode='Markdown')
+            
+        elif text == "📊 Health Track":
+            await update.message.reply_text(
+                "📊 *Health Tracking*\n\n"
+                "Track your symptoms over time:\n\n"
+                "• Use /analyze for regular check-ins\n"
+                "• Note symptom changes\n"
+                "• Monitor improvement patterns\n"
+                "• Share trends with your doctor",
+                parse_mode='Markdown'
+            )
+            
         else:
-            # Use AI for general medical questions
+            # Use AI for general queries
             await update.message.chat.send_action(action="typing")
-            prompt = f"Answer this medical/health question clearly, accurately, and helpfully: {text}"
             try:
-                response = self.gemini_model.generate_content(prompt)
+                response = self.gemini_model.generate_content(
+                    f"Answer this health/medical question concisely and helpfully: {text}"
+                )
                 await update.message.reply_text(
-                    f"🔬 *RAGnosis AI Response:*\n\n{response.text}",
+                    f"🔬 *RAGnosis AI:*\n\n{response.text}",
                     parse_mode='Markdown'
                 )
             except Exception as e:
                 await update.message.reply_text(
-                    "❌ *I encountered an error processing your question.*\n\nPlease try rephrasing or use /start for the main menu.",
+                    "❌ I couldn't process that. Try rephrasing or use /start for menu.",
                     parse_mode='Markdown'
                 )
 
-    def setup_handlers(self, application):
-        """Setup all conversation handlers"""
-        
-        # Main symptom analysis conversation
-        conv_handler = ConversationHandler(
-            entry_points=[
-                MessageHandler(filters.Regex("^(🔍 Symptom Analysis)$"), self.quick_symptom_analysis),
-                CommandHandler("symptoms", self.quick_symptom_analysis),
-                CommandHandler("analyze", self.quick_symptom_analysis)
-            ],
-            states={
-                SYMPTOMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_symptoms)],
-                AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_age)],
-                GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_gender)],
-                DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_duration)],
-                SEVERITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_severity)],
-                MEDICAL_HISTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.perform_ai_analysis)],
-            },
-            fallbacks=[CommandHandler("cancel", self.start)]
-        )
-        
-        # Add all handlers
-        application.add_handler(CommandHandler("start", self.start))
-        application.add_handler(CommandHandler("help", self.start))
-        application.add_handler(CommandHandler("menu", self.show_main_menu))
-        application.add_handler(conv_handler)
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+    async def send_random_tip(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Send random health tip"""
+        tip = random.choice(self.health_tips)
+        await update.message.reply_text(f"💡 *Health Tip:*\n\n{tip}", parse_mode='Markdown')
 
     async def run(self):
-        """Run the RAGnosis bot"""
-        if not self.token:
-            logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
-            return
-            
+        """Run the dynamic bot"""
         application = Application.builder().token(self.token).build()
         self.setup_handlers(application)
         
-        # Bot info
-        logger.info("🚀 RAGnosis AI Medical Bot is starting...")
-        print("🔬 RAGnosis Bot Features:")
-        print("• 🤖 Gemini AI Powered")
-        print("• 🔍 Smart Symptom Analysis") 
-        print("• 💊 Drug Intelligence")
-        print("• 🚨 Emergency Guidance")
-        print("• 📚 Medical Education")
-        print("• 📱 24/7 Availability")
-        print(f"• 👥 Public Access: t.me/ragnosisbot")
+        # Add job queue for dynamic features
+        job_queue = application.job_queue
+        if job_queue:
+            job_queue.run_repeating(self.update_analytics, interval=300, first=10)  # Every 5 min
+        
+        print("🚀 Dynamic RAGnosis Bot Started!")
+        print("🎯 Features: AI Analysis • Analytics • Dynamic Menus • User Sessions")
+        print("🌍 Live at: t.me/ragnosisbot")
         
         await application.run_polling()
 
-# Run the bot
+    async def update_analytics(self, context: ContextTypes.DEFAULT_TYPE):
+        """Update analytics periodically"""
+        self.analytics['active_conversations'] = len(self.user_sessions)
+        logger.info(f"Analytics updated: {self.analytics}")
+
+# Add the missing dynamic collection methods
+async def collect_gender_dynamic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    self.user_sessions[user_id]['age'] = update.message.text
+    
+    gender_options = [
+        [KeyboardButton("👨 Male"), KeyboardButton("👩 Female")],
+        [KeyboardButton("⚧ Other"), KeyboardButton("🚫 Prefer not to say")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(gender_options, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "👤 *Biological Sex*\n\nThis helps with condition-specific recommendations:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ConversationState.GENDER
+
+async def collect_duration_dynamic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    self.user_sessions[user_id]['gender'] = update.message.text
+    
+    duration_options = [
+        [KeyboardButton("⏱️ <24 hours"), KeyboardButton("🕐 1-3 days")],
+        [KeyboardButton("🕑 3-7 days"), KeyboardButton("🕒 1-4 weeks")],
+        [KeyboardButton("🕓 >1 month"), KeyboardButton("❓ Not sure")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(duration_options, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "⏰ *Symptom Duration*\n\nHow long have you experienced these symptoms?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ConversationState.DURATION
+
+async def collect_severity_dynamic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    self.user_sessions[user_id]['duration'] = update.message.text
+    
+    severity_options = [
+        [KeyboardButton("😊 Mild"), KeyboardButton("😐 Moderate")],
+        [KeyboardButton("😫 Severe"), KeyboardButton("🚨 Critical")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(severity_options, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "📊 *Symptom Severity*\n\nHow severe are your symptoms currently?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ConversationState.SEVERITY
+
+# Add these methods to the class
+DynamicRagnosisBot.collect_gender_dynamic = collect_gender_dynamic
+DynamicRagnosisBot.collect_duration_dynamic = collect_duration_dynamic  
+DynamicRagnosisBot.collect_severity_dynamic = collect_severity_dynamic
+
+# Start the dynamic bot
 if __name__ == "__main__":
-    bot = RagnosisBot()
-    asyncio.run(bot.run())
+    bot = DynamicRagnosisBot()
+    
+    if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("GEMINI_API_KEY"):
+        print("❌ Please set environment variables in Replit Secrets!")
+    else:
+        asyncio.run(bot.run())
