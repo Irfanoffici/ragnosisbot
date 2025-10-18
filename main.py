@@ -709,8 +709,8 @@ class DynamicRagnosisBot:
         # Add handler for other features
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_dynamic_message))
 
-    async def run_forever(self):
-        """Run the bot and ignore shutdown errors"""
+    async def run_bot(self):
+        """Run the bot with proper error handling"""
         try:
             # Create application
             application = Application.builder().token(self.token).build()
@@ -721,21 +721,20 @@ class DynamicRagnosisBot:
             print("🔧 Running on Railway")
             print("📱 Bot is live and waiting for messages...")
             
-            # Start polling - this will run forever
-            await application.run_polling()
+            # Start polling with proper cleanup
+            await application.run_polling(
+                drop_pending_updates=True,
+                close_loop=False,  # Don't close the event loop
+                stop_signals=None  # Don't handle stop signals
+            )
             
         except Exception as e:
-            # IGNORE SHUTDOWN ERRORS - they don't affect bot operation
-            if "Cannot close a running event loop" in str(e):
-                print("⚠️  Ignoring shutdown error - bot was running successfully")
-                return
-            else:
-                logger.error(f"Bot run error: {e}")
-                print(f"❌ Bot failed: {e}")
+            logger.error(f"Bot run error: {e}")
+            print(f"❌ Bot failed: {e}")
 
-# ===== ULTRA ROBUST ENTRY POINT =====
-def main():
-    """Main entry point - IGNORES SHUTDOWN ERRORS"""
+# ===== SIMPLE ROBUST ENTRY POINT =====
+async def main_async():
+    """Main async entry point"""
     print("🤖 Starting RAGnosis Bot...")
     
     # Validate environment variables
@@ -752,19 +751,23 @@ def main():
     try:
         # Create and run bot
         bot = DynamicRagnosisBot()
-        
-        # Run the bot - ignore shutdown errors
-        asyncio.run(bot.run_forever())
+        await bot.run_bot()
         
     except Exception as e:
-        # IGNORE ALL ERRORS - the bot already started successfully
-        print(f"⚠️  Ignoring error (bot was running): {e}")
-        
-    # Keep process alive forever
-    print("🔁 Bot process staying alive...")
-    import time
-    while True:
-        time.sleep(3600)  # Sleep forever
+        print(f"❌ Bot crashed: {e}")
+        # Don't try to recover, just let it restart
+
+def main():
+    """Main entry point - handles asyncio properly"""
+    try:
+        # Run the async main function
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        print("Bot stopped by user")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    finally:
+        print("Bot process ended")
 
 # Railway entry point
 if __name__ == "__main__":
