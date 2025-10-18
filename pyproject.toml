@@ -1,7 +1,9 @@
-[project]
-dependencies = [
-    "python-telegram-bot>=20.7",
-    "google-generativeai",
-    "python-dotenv",
-    "aiohttp",
-]
+[build]
+builder = "nixpacks"
+
+[deploy]
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"
+
+[env]
+NIXPACKS_BUILD_COMMAND = "echo 'Building MEDIX PRO AI...'"
