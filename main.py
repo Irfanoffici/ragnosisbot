@@ -44,7 +44,8 @@ logger = logging.getLogger(__name__)
 # Configure Gemini
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is required")
+    print("❌ GEMINI_API_KEY not found!")
+    exit(1)
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Dynamic conversation states
@@ -71,8 +72,10 @@ class DynamicRagnosisBot:
     def __init__(self):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         if not self.token:
-            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+            print("❌ TELEGRAM_BOT_TOKEN not found!")
+            exit(1)
         
+        print("✅ Initializing RAGnosis Bot...")
         self.gemini_model = genai.GenerativeModel('gemini-pro')
         
         # Dynamic data storage
@@ -126,9 +129,9 @@ class DynamicRagnosisBot:
             ''')
             
             self.conn.commit()
-            logger.info("Database initialized successfully")
+            print("✅ Database initialized successfully")
         except Exception as e:
-            logger.error(f"Database initialization error: {e}")
+            print(f"❌ Database initialization error: {e}")
 
     def log_analytics(self, user_id: int, username: str, first_name: str, symptom: str = None):
         """Dynamic analytics logging"""
@@ -155,7 +158,7 @@ class DynamicRagnosisBot:
                 'SELECT COUNT(*) FROM user_sessions WHERE date(last_active) = date("now")'
             ).fetchone()[0]
         except Exception as e:
-            logger.error(f"Analytics logging error: {e}")
+            print(f"❌ Analytics logging error: {e}")
 
     async def dynamic_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Dynamic start with personalized greeting"""
@@ -216,7 +219,7 @@ class DynamicRagnosisBot:
             asyncio.create_task(send_tip())
             
         except Exception as e:
-            logger.error(f"Start command error: {e}")
+            print(f"❌ Start command error: {e}")
             await update.message.reply_text("❌ An error occurred. Please try again.")
 
     async def dynamic_symptom_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -261,7 +264,7 @@ class DynamicRagnosisBot:
             
             return ConversationState.SYMPTOMS
         except Exception as e:
-            logger.error(f"Symptom analysis error: {e}")
+            print(f"❌ Symptom analysis error: {e}")
             await update.message.reply_text("❌ Error starting symptom analysis. Please try again.")
             return ConversationHandler.END
 
@@ -311,7 +314,7 @@ class DynamicRagnosisBot:
                 
                 return ConversationState.SYMPTOMS
         except Exception as e:
-            logger.error(f"Symptom selection error: {e}")
+            print(f"❌ Symptom selection error: {e}")
             await update.message.reply_text("❌ Error processing selection. Please try again.")
             return ConversationState.SYMPTOMS
 
@@ -357,7 +360,7 @@ class DynamicRagnosisBot:
             )
             
         except Exception as e:
-            logger.error(f"Quick analysis error: {e}")
+            print(f"❌ Quick analysis error: {e}")
             await update.message.reply_text("❌ Quick analysis failed. Please try full analysis.")
         
         await self.dynamic_start(update, context)
@@ -387,7 +390,7 @@ class DynamicRagnosisBot:
             
             return ConversationState.AGE
         except Exception as e:
-            logger.error(f"Age collection error: {e}")
+            print(f"❌ Age collection error: {e}")
             return ConversationHandler.END
 
     async def collect_gender_dynamic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -409,7 +412,7 @@ class DynamicRagnosisBot:
             )
             return ConversationState.GENDER
         except Exception as e:
-            logger.error(f"Gender collection error: {e}")
+            print(f"❌ Gender collection error: {e}")
             return ConversationHandler.END
 
     async def collect_duration_dynamic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -432,7 +435,7 @@ class DynamicRagnosisBot:
             )
             return ConversationState.DURATION
         except Exception as e:
-            logger.error(f"Duration collection error: {e}")
+            print(f"❌ Duration collection error: {e}")
             return ConversationHandler.END
 
     async def collect_severity_dynamic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -454,7 +457,7 @@ class DynamicRagnosisBot:
             )
             return ConversationState.SEVERITY
         except Exception as e:
-            logger.error(f"Severity collection error: {e}")
+            print(f"❌ Severity collection error: {e}")
             return ConversationHandler.END
 
     async def smart_ai_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -527,7 +530,7 @@ class DynamicRagnosisBot:
             session['analysis_complete'] = True
             
         except Exception as e:
-            logger.error(f"AI Analysis error: {e}")
+            print(f"❌ AI Analysis error: {e}")
             await update.message.reply_text(
                 "❌ *Analysis Error*\n\nI encountered an issue. Please try again or use quick analysis.",
                 parse_mode='Markdown'
@@ -575,32 +578,28 @@ class DynamicRagnosisBot:
             
             return ConversationState.FOLLOW_UP
         except Exception as e:
-            logger.error(f"Follow-up error: {e}")
+            print(f"❌ Follow-up error: {e}")
             return ConversationHandler.END
 
     async def show_analytics(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show bot analytics (admin feature)"""
+        """Show bot analytics to everyone"""
         try:
-            user_id = update.effective_user.id
+            cursor = self.conn.cursor()
             
-            # Simple admin check
-            if user_id == 5757538431:  
-                cursor = self.conn.cursor()
-                
-                total_users = cursor.execute('SELECT COUNT(*) FROM user_sessions').fetchone()[0]
-                today_sessions = cursor.execute(
-                    'SELECT COUNT(*) FROM user_sessions WHERE date(last_active) = date("now")'
-                ).fetchone()[0]
-                
-                common_symptoms = cursor.execute('''
-                    SELECT symptom, SUM(count) as total 
-                    FROM symptom_analytics 
-                    GROUP BY symptom 
-                    ORDER BY total DESC 
-                    LIMIT 5
-                ''').fetchall()
-                
-                analytics_text = f"""
+            total_users = cursor.execute('SELECT COUNT(*) FROM user_sessions').fetchone()[0]
+            today_sessions = cursor.execute(
+                'SELECT COUNT(*) FROM user_sessions WHERE date(last_active) = date("now")'
+            ).fetchone()[0]
+            
+            common_symptoms = cursor.execute('''
+                SELECT symptom, SUM(count) as total 
+                FROM symptom_analytics 
+                GROUP BY symptom 
+                ORDER BY total DESC 
+                LIMIT 5
+            ''').fetchall()
+            
+            analytics_text = f"""
 📊 *RAGnosis Analytics*
 
 👥 Users: {total_users}
@@ -611,13 +610,13 @@ class DynamicRagnosisBot:
 {chr(10).join([f'• {symptom}: {count}' for symptom, count in common_symptoms])}
 
 🕒 Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-                """
-                
-                await update.message.reply_text(analytics_text, parse_mode='Markdown')
-            else:
-                await update.message.reply_text("🔒 Analytics available for administrators only.")
+            """
+            
+            await update.message.reply_text(analytics_text, parse_mode='Markdown')
+            
         except Exception as e:
-            logger.error(f"Analytics error: {e}")
+            print(f"❌ Analytics error: {e}")
+            await update.message.reply_text("❌ Could not load analytics.")
 
     async def send_random_tip(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Send random health tip"""
@@ -625,7 +624,7 @@ class DynamicRagnosisBot:
             tip = random.choice(self.health_tips)
             await update.message.reply_text(f"💡 *Health Tip:*\n\n{tip}", parse_mode='Markdown')
         except Exception as e:
-            logger.error(f"Random tip error: {e}")
+            print(f"❌ Random tip error: {e}")
 
     async def handle_dynamic_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle all other dynamic messages"""
@@ -663,7 +662,7 @@ class DynamicRagnosisBot:
                         parse_mode='Markdown'
                     )
         except Exception as e:
-            logger.error(f"Dynamic message error: {e}")
+            print(f"❌ Dynamic message error: {e}")
 
     def setup_handlers(self, application):
         """Setup all dynamic handlers"""
@@ -725,8 +724,7 @@ class DynamicRagnosisBot:
             await application.run_polling()
             
         except Exception as e:
-            logger.error(f"Bot run error: {e}")
-            print(f"❌ Bot failed: {e}")
+            print(f"❌ Bot run error: {e}")
 
 # ===== ULTRA SIMPLE ENTRY POINT =====
 def main():
@@ -752,7 +750,6 @@ def main():
         asyncio.run(bot.run_bot())
     except Exception as e:
         print(f"❌ Bot crashed: {e}")
-        print("🔄 Process will restart automatically...")
 
 # Railway entry point
 if __name__ == "__main__":
