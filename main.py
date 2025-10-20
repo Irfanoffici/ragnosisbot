@@ -8,21 +8,24 @@ import os
 import asyncio
 import random
 import json
-import pickle
+import time
+import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
     CommandHandler, 
     MessageHandler, 
     filters, 
     ContextTypes, 
-    ConversationHandler
+    ConversationHandler,
+    CallbackQueryHandler
 )
 import google.generativeai as genai
 from dotenv import load_dotenv
+import wikipediaapi
 
 # Load environment variables
 load_dotenv()
@@ -38,10 +41,17 @@ if not all([GEMINI_API_KEY, TELEGRAM_BOT_TOKEN]):
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-pro')
 
-# Conversation states
-CHAT_MODE, DIAGNOSIS_MODE, SYMPTOM_ANALYSIS, EMOTIONAL_SUPPORT = range(4)
+# Wikipedia setup
+wiki_wiki = wikipediaapi.Wikipedia(
+    user_agent='RagnosisAI/2.0',
+    language='en',
+    extract_format=wikipediaapi.ExtractFormat.WIKI
+)
 
-class EnhancedRagnosisAI:
+# Conversation states
+MAIN_MENU, CHAT_MODE, DIAGNOSIS_MODE, EMOTIONAL_SUPPORT, HEALTH_LIBRARY = range(5)
+
+class UltimateRagnosisAI:
     def __init__(self):
         self.user_sessions: Dict[int, Dict] = {}
         self.user_profiles: Dict[int, Dict] = {}
@@ -49,7 +59,9 @@ class EnhancedRagnosisAI:
         self.data_dir = Path("data")
         self.data_dir.mkdir(exist_ok=True)
         self.load_data()
-        print("🎉 Enhanced RAGnosis AI initialized with file-based memory!")
+        self.startup_time = datetime.now()
+        self.total_queries = 0
+        print("🎉 Ultimate RAGnosis AI initialized with advanced features!")
 
     def load_data(self):
         """Load user data from JSON files"""
@@ -64,7 +76,6 @@ class EnhancedRagnosisAI:
             memory_file = self.data_dir / "conversation_memory.json"
             if memory_file.exists():
                 with open(memory_file, 'r') as f:
-                    # Convert string keys back to integers
                     memory_data = json.load(f)
                     self.conversation_memory = {int(k): v for k, v in memory_data.items()}
                     
@@ -88,6 +99,40 @@ class EnhancedRagnosisAI:
                 
         except Exception as e:
             print(f"⚠️ Could not save data: {e}")
+
+    def search_wikipedia_medical(self, query: str, max_results: int = 3):
+        """Search Wikipedia for medical information"""
+        try:
+            search_results = []
+            
+            medical_terms = [
+                query,
+                f"{query} (medicine)",
+                f"{query} disease",
+                f"{query} symptoms",
+                f"{query} treatment",
+                f"{query} diagnosis"
+            ]
+            
+            for term in medical_terms:
+                if len(search_results) >= max_results:
+                    break
+                    
+                page = wiki_wiki.page(term)
+                if page.exists() and len(page.summary) > 100:
+                    preview = page.summary[:300] + "..." if len(page.summary) > 300 else page.summary
+                    search_results.append({
+                        "title": page.title,
+                        "url": page.fullurl,
+                        "preview": preview,
+                        "full_summary": page.summary[:800]
+                    })
+            
+            return search_results[:max_results]
+            
+        except Exception as e:
+            print(f"❌ Wikipedia search error: {e}")
+            return []
 
     def save_conversation(self, user_id: int, user_message: str, ai_response: str, conv_type: str = "general"):
         """Save conversation to memory"""
@@ -117,28 +162,11 @@ class EnhancedRagnosisAI:
         history = self.conversation_memory[user_id][-limit:]
         return history
 
-    # 🧠 ENHANCED PERSONALITY SYSTEM
-    PERSONALITY_TRAITS = {
-        "warm": ["😊", "🤗", "💫", "🌟", "🌈"],
-        "professional": ["🔍", "🎯", "📊", "🩺", "💡"],
-        "encouraging": ["🚀", "💪", "🏆", "🎉", "✨"],
-        "empathetic": ["❤️", "🤝", "🌷", "💝", "🌻"]
-    }
-
-    def get_personality_greeting(self) -> str:
-        traits = random.choice(list(self.PERSONALITY_TRAITS.values()))
-        emoji = random.choice(traits)
-        greetings = [
-            f"{emoji} Hey there! Dr. AI here, ready to chat about your health!",
-            f"{emoji} Hello! Your friendly medical AI is online and listening!",
-            f"{emoji} Hi! I'm here to help you feel better and understand your health!",
-            f"{emoji} Welcome back! Ready to continue our health conversation?",
-            f"{emoji} Greetings! Your personalized health companion is here!"
-        ]
-        return random.choice(greetings)
-
     async def get_intelligent_response(self, user_id: int, user_message: str, context: str = "general") -> str:
-        """Get intelligent, context-aware response with memory"""
+        """Get intelligent, context-aware response with memory and Wikipedia"""
+        
+        start_time = time.time()
+        self.total_queries += 1
         
         # Get conversation history
         history = self.get_conversation_history(user_id, 8)
@@ -149,19 +177,31 @@ class EnhancedRagnosisAI:
             for i, msg in enumerate(history):
                 history_text += f"User: {msg['user']}\nAI: {msg['ai']}\n\n"
         
+        # Search Wikipedia for medical information
+        wikipedia_results = []
+        if any(keyword in user_message.lower() for keyword in 
+               ['disease', 'symptom', 'treatment', 'medical', 'health', 'diagnosis', 'medicine', 'pain', 'illness', 'condition']):
+            wikipedia_results = self.search_wikipedia_medical(user_message)
+        
+        # Build Wikipedia context
+        wiki_context = ""
+        if wikipedia_results:
+            wiki_context = "\n\n📚 RELEVANT MEDICAL INFORMATION FROM WIKIPEDIA:\n"
+            for i, result in enumerate(wikipedia_results, 1):
+                wiki_context += f"{i}. {result['title']}: {result['preview']}\n"
+        
         # Get user profile
         profile = self.user_profiles.get(user_id, {})
         profile_text = f"""
         User Profile:
         - Name: {profile.get('name', 'Friend')}
-        - Age: {profile.get('age', 'Not specified')}
-        - Gender: {profile.get('gender', 'Not specified')}
+        - Conversation Count: {profile.get('conversation_count', 0)}
         - Health Interests: {profile.get('health_interests', 'General wellness')}
         """
         
         # Enhanced prompt for intelligent conversation
         prompt = f"""
-        You are RAGnosis AI - an intelligent, empathetic, and highly capable medical AI assistant. 
+        You are Ragnosis AI - an intelligent, empathetic, and highly capable medical AI assistant. 
         You're having a natural, flowing conversation with a user about their health concerns.
 
         USER PROFILE:
@@ -169,6 +209,8 @@ class EnhancedRagnosisAI:
 
         CONVERSATION HISTORY (most recent first):
         {history_text}
+
+        {wiki_context}
 
         CURRENT USER MESSAGE:
         "{user_message}"
@@ -181,11 +223,14 @@ class EnhancedRagnosisAI:
         3. 🧠 Provide INSIGHTFUL medical perspective when relevant
         4. ❓ Ask thoughtful FOLLOW-UP questions to understand better
         5. 🌟 Use APPROPRIATE emojis to enhance communication
-        6. 📚 Cite reliable medical information when applicable
-        7. 🔄 Reference previous conversation naturally when relevant
+        6. 📚 Cite Wikipedia information when relevant
+        7. 🔄 Reference previous conversation naturally
         8. 💪 EMPOWER and ENCOURAGE the user
-        9. 🎨 Be CREATIVE in your approach to health discussions
-        10. 🏥 Always emphasize PROFESSIONAL medical advice for serious concerns
+        9. 🏥 Always include medical disclaimer for serious topics
+        10. 🎨 Be CREATIVE in health discussions
+
+        MEDICAL DISCLAIMER (include when discussing symptoms/treatments):
+        "💡 Remember: I'm an AI assistant for informational purposes. Always consult healthcare professionals for medical advice."
 
         CONVERSATION FLOW:
         - Acknowledge their message naturally
@@ -193,7 +238,7 @@ class EnhancedRagnosisAI:
         - Ask a relevant follow-up question
         - Keep the conversation flowing naturally
 
-        Response length: 3-6 sentences. Be engaging but concise.
+        Response length: 4-7 sentences. Be engaging but concise.
         """
 
         try:
@@ -203,14 +248,46 @@ class EnhancedRagnosisAI:
             # Save to memory
             self.save_conversation(user_id, user_message, ai_response, context)
             
+            response_time = time.time() - start_time
+            print(f"✅ AI response generated in {response_time:.2f}s for user {user_id}")
+            
             return ai_response
             
         except Exception as e:
             print(f"AI Response Error: {e}")
             return "🤖 I'm here and listening! Tell me more about how you're feeling today. 💬"
 
+    def get_follow_up_questions(self, user_message: str) -> List[str]:
+        """Generate relevant follow-up questions"""
+        question_lower = user_message.lower()
+        
+        if any(word in question_lower for word in ['symptom', 'feel', 'pain', 'hurt', 'ache']):
+            return [
+                "How long have you been experiencing this?",
+                "Have you noticed any triggers?",
+                "What makes it better or worse?"
+            ]
+        elif any(word in question_lower for word in ['diagnos', 'test', 'result']):
+            return [
+                "Have you consulted a doctor about this?",
+                "What tests have you had so far?",
+                "When did you first notice these symptoms?"
+            ]
+        elif any(word in question_lower for word in ['treat', 'medic', 'therapy']):
+            return [
+                "What treatments have you tried?",
+                "Are you currently taking any medications?",
+                "Have you had any side effects?"
+            ]
+        else:
+            return [
+                "Would you like me to explain anything in more detail?",
+                "Is there anything else you'd like to know?",
+                "How are you feeling about this information?"
+            ]
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Enhanced start with intelligent memory"""
+        """Enhanced start command with user profiling"""
         user = update.effective_user
         user_id = user.id
         
@@ -218,7 +295,8 @@ class EnhancedRagnosisAI:
         if user_id not in self.user_profiles:
             self.user_profiles[user_id] = {
                 'name': user.first_name,
-                'join_date': datetime.now().strftime("%Y-%m-%d"),
+                'username': user.username,
+                'join_date': datetime.now().isoformat(),
                 'conversation_count': 0,
                 'last_active': datetime.now().isoformat(),
                 'health_interests': []
@@ -227,71 +305,106 @@ class EnhancedRagnosisAI:
             self.user_profiles[user_id]['last_active'] = datetime.now().isoformat()
 
         welcome_text = f"""
-{self.get_personality_greeting()}
+🤖 **Ragnosis AI - Ultimate Medical Companion** 🎉
 
-**I'm RAGnosis AI 2.0** - Your Intelligent Health Companion! 🧠
+👋 Hello {user.first_name}! I'm your advanced AI health assistant with:
 
-🎊 **Enhanced Features:**
-• 🧠 **Smart Chat** - Remembers our conversations and learns about you
-• 🎯 **Advanced Diagnosis** - Deep symptom analysis with follow-up questions  
-• 💭 **Emotional Intelligence** - Understands your feelings and mood
-• 📚 **Medical Knowledge** - Evidence-based health information
-• 🏋️ **Personalized Advice** - Tailored to your unique situation
-• 🔄 **Continuous Learning** - Gets better the more we talk
-• 🎨 **Creative Health Solutions** - Fun and innovative approaches
+✨ **Advanced Features:**
+• 🧠 **Intelligent Chat** - Remembers our conversations
+• 🔍 **Medical Research** - Wikipedia integration
+• 💭 **Emotional Support** - Mental wellness guidance
+• 📚 **Health Library** - Evidence-based information
+• 🎯 **Symptom Analysis** - Detailed assessment
+• 💊 **Treatment Info** - Medication insights
+• 🌟 **Wellness Coaching** - Lifestyle guidance
 
-**Choose how you'd like to interact today:** 🚀
+💡 **I can help with:**
+- Medical questions and information
+- Symptom analysis and guidance  
+- Emotional support and mental health
+- Medication and treatment information
+- Wellness and prevention tips
+- Health education
+
+**Choose your interaction mode below:** 👇
         """
         
         keyboard = [
-            [KeyboardButton("🧠 Smart Chat Mode"), KeyboardButton("🎯 Advanced Diagnosis")],
-            [KeyboardButton("💭 Emotional Support"), KeyboardButton("🏋️ Wellness Coach")],
-            [KeyboardButton("📚 Health Library"), KeyboardButton("🔍 Symptom Checker")],
-            [KeyboardButton("📊 Health Report"), KeyboardButton("🎮 Health Games")]
+            [KeyboardButton("🧠 Smart Chat"), KeyboardButton("🔍 Symptom Checker")],
+            [KeyboardButton("💭 Emotional Support"), KeyboardButton("📚 Health Library")],
+            [KeyboardButton("💊 Medication Info"), KeyboardButton("🌟 Wellness Coach")],
+            [KeyboardButton("📊 Health Report"), KeyboardButton("ℹ️ Bot Info")]
         ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
         
         await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
-        
-        # Save data after profile update
         self.save_data()
+        return MAIN_MENU
+
+    async def handle_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle main menu selections"""
+        user_id = update.effective_user.id
+        text = update.message.text
+        
+        menu_handlers = {
+            "🧠 Smart Chat": self.start_smart_chat,
+            "🔍 Symptom Checker": self.start_symptom_checker,
+            "💭 Emotional Support": self.start_emotional_support,
+            "📚 Health Library": self.start_health_library,
+            "💊 Medication Info": self.start_medication_info,
+            "🌟 Wellness Coach": self.start_wellness_coach,
+            "📊 Health Report": self.generate_health_report,
+            "ℹ️ Bot Info": self.show_bot_info
+        }
+        
+        if text in menu_handlers:
+            return await menu_handlers[text](update, context)
+        else:
+            # If user sends random text, start smart chat
+            await update.message.reply_text(
+                "💬 I see you want to chat! Let me switch to **Smart Chat Mode** for our conversation. 🧠",
+                parse_mode='Markdown'
+            )
+            return await self.start_smart_chat(update, context)
 
     async def start_smart_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start intelligent chat mode with memory"""
+        """Start intelligent chat mode"""
         user_id = update.effective_user.id
         
-        # Get recent conversation history
+        # Update user profile
+        self.user_profiles[user_id]['conversation_count'] += 1
+        self.user_profiles[user_id]['last_active'] = datetime.now().isoformat()
+        
         history = self.get_conversation_history(user_id, 5)
         
-        welcome_msg = f"""
-🧠 **Smart Chat Mode Activated!** 🎉
+        welcome_msg = """
+🧠 **Smart Chat Mode Activated!** 💫
 
-{self.get_personality_greeting()}
+I'm now in intelligent conversation mode! I'll:
 
-I remember our previous conversations and I'm here to continue supporting your health journey!
-
-💫 **What makes this special:**
-• I remember what we've discussed
-• I learn about your health patterns
-• I provide personalized insights
-• Our conversation flows naturally
+• Remember our previous chats
+• Provide medically accurate information  
+• Search Wikipedia when needed
+• Offer emotional support
+• Ask relevant follow-up questions
 
 **Just start talking!** Tell me about:
-• How you're feeling today
-• Any health concerns
-• Your wellness goals
-• Or anything health-related!
+- Any health concerns
+- Symptoms you're experiencing
+- Medical questions
+- How you're feeling
+- Or anything health-related!
 
-I'm listening carefully and will respond thoughtfully. 💬
+I'm here to listen and help! 💬
         """
         
         if history:
-            welcome_msg += "\n\n📝 **I recall our previous chat** - let's continue where we left off!"
+            welcome_msg += "\n\n📝 **I remember our previous conversation** - let's continue!"
         
         keyboard = [
-            [KeyboardButton("🔍 Analyze Symptoms"), KeyboardButton("💭 How are you feeling?")],
-            [KeyboardButton("🏋️ Wellness Check"), KeyboardButton("📊 Generate Insight")],
-            [KeyboardButton("🔄 Change Mode"), KeyboardButton("🏠 Main Menu")]
+            [KeyboardButton("🔍 Analyze Symptoms"), KeyboardButton("💊 Medication Query")],
+            [KeyboardButton("📚 Research Topic"), KeyboardButton("💭 Emotional Check")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("🔄 New Topic")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -299,113 +412,103 @@ I'm listening carefully and will respond thoughtfully. 💬
         return CHAT_MODE
 
     async def handle_chat_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle intelligent chat with memory and context"""
+        """Handle intelligent chat conversations"""
         user_id = update.effective_user.id
         user_message = update.message.text
         
         print(f"💭 User {user_id}: {user_message}")
         
         # Handle quick actions
-        quick_actions = {
-            "🔍 Analyze Symptoms": "symptom_analysis",
-            "💭 How are you feeling?": "emotional_check",
-            "🏋️ Wellness Check": "wellness_check", 
-            "📊 Generate Insight": "generate_insight",
-            "🔄 Change Mode": "change_mode",
-            "🏠 Main Menu": "main_menu"
-        }
+        if user_message == "🏠 Main Menu":
+            await self.return_to_main_menu(update, user_id)
+            return MAIN_MENU
+            
+        elif user_message == "🔍 Analyze Symptoms":
+            await update.message.reply_text(
+                "🔍 **Symptom Analysis Mode**\n\nPlease describe your symptoms in detail...",
+                parse_mode='Markdown'
+            )
+            return CHAT_MODE
+            
+        elif user_message == "💊 Medication Query":
+            await update.message.reply_text(
+                "💊 **Medication Information**\n\nWhat medication would you like to know about?",
+                parse_mode='Markdown'
+            )
+            return CHAT_MODE
+            
+        elif user_message == "📚 Research Topic":
+            await update.message.reply_text(
+                "📚 **Health Research**\n\nWhat health topic would you like me to research?",
+                parse_mode='Markdown'
+            )
+            return CHAT_MODE
+            
+        elif user_message == "💭 Emotional Check":
+            await update.message.reply_text(
+                "💭 **Emotional Check-in**\n\nHow are you feeling emotionally today?",
+                parse_mode='Markdown'
+            )
+            return CHAT_MODE
+            
+        elif user_message == "🔄 New Topic":
+            await update.message.reply_text(
+                "🔄 **New Topic**\n\nWhat would you like to discuss now?",
+                parse_mode='Markdown'
+            )
+            return CHAT_MODE
         
-        if user_message in quick_actions:
-            return await self.handle_quick_action(update, user_id, quick_actions[user_message])
-        
-        # Update user profile
-        self.user_profiles[user_id]['conversation_count'] = self.user_profiles[user_id].get('conversation_count', 0) + 1
-        self.user_profiles[user_id]['last_active'] = datetime.now().isoformat()
-        
-        # Show typing indicator
+        # Show typing action
         await update.message.reply_chat_action("typing")
         
-        # Get intelligent response
+        # Get intelligent AI response
         ai_response = await self.get_intelligent_response(user_id, user_message, "smart_chat")
         
-        # Enhanced keyboard based on conversation context
+        # Get follow-up questions
+        follow_ups = self.get_follow_up_questions(user_message)
+        
+        # Create response with follow-up options
+        response_text = f"{ai_response}\n\n"
+        
+        if follow_ups:
+            response_text += "💭 **Follow-up Questions:**\n"
+            for i, question in enumerate(follow_ups[:2], 1):
+                response_text += f"{i}. {question}\n"
+        
+        # Enhanced keyboard
         keyboard = [
-            [KeyboardButton("🔍 Analyze Deeper"), KeyboardButton("💭 Tell me more")],
-            [KeyboardButton("🏋️ Wellness Tips"), KeyboardButton("📊 Get Summary")],
-            [KeyboardButton("🔄 New Topic"), KeyboardButton("🏠 Main Menu")]
+            [KeyboardButton("🔍 More Details"), KeyboardButton("💭 Related Questions")],
+            [KeyboardButton("📚 Research More"), KeyboardButton("💊 Medication Info")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("🔄 New Topic")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
-        await update.message.reply_text(ai_response, reply_markup=reply_markup, parse_mode='Markdown')
-        
-        # Save data after conversation
-        self.save_data()
+        await update.message.reply_text(response_text, reply_markup=reply_markup, parse_mode='Markdown')
         return CHAT_MODE
 
-    async def handle_quick_action(self, update: Update, user_id: int, action: str):
-        """Handle quick action buttons"""
-        
-        if action == "main_menu":
-            await self.return_to_main_menu(update, user_id)
-            return ConversationHandler.END
-            
-        elif action == "symptom_analysis":
-            await self.start_symptom_analysis(update, user_id)
-            return DIAGNOSIS_MODE
-            
-        elif action == "emotional_check":
-            response = await self.get_intelligent_response(user_id, "I want to talk about how I'm feeling emotionally", "emotional_support")
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return CHAT_MODE
-            
-        elif action == "wellness_check":
-            wellness_prompt = "Give me a wellness check and lifestyle assessment"
-            response = await self.get_intelligent_response(user_id, wellness_prompt, "wellness_check")
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return CHAT_MODE
-            
-        elif action == "generate_insight":
-            await self.generate_health_insight(update, user_id)
-            return CHAT_MODE
-            
-        elif action == "change_mode":
-            await update.message.reply_text(
-                "🔄 **Changing Modes**\n\nWhich mode would you prefer?",
-                reply_markup=ReplyKeyboardMarkup([
-                    ["🎯 Diagnosis Mode", "💭 Emotional Mode"],
-                    ["🏋️ Wellness Mode", "🧠 Continue Smart Chat"],
-                    ["🏠 Main Menu"]
-                ], resize_keyboard=True)
-            )
-            return CHAT_MODE
-
-    async def start_symptom_analysis(self, update: Update, user_id: int):
+    async def start_symptom_checker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start advanced symptom analysis"""
+        user_id = update.effective_user.id
         
         analysis_intro = """
-🔍 **Advanced Symptom Analysis** 🎯
+🔍 **Advanced Symptom Checker** 🩺
 
-I'm now in diagnosis mode! I'll ask thoughtful questions to understand your symptoms thoroughly.
+I'll help you understand your symptoms better. Please describe:
 
-💡 **My approach:**
-- Deep understanding of your symptoms
-- Context-aware questioning
-- Personalized risk assessment
-- Actionable recommendations
+• What you're experiencing
+• When it started
+• How severe it is (1-10 scale)
+• Any patterns or triggers
+• Other associated symptoms
 
-**Please describe your main symptom or health concern:** 🗣️
-
-You can tell me:
-- What you're experiencing
-- When it started
-- How severe it is
-- Anything that makes it better or worse
+**Please describe your main concern:** 👇
         """
         
         keyboard = [
-            [KeyboardButton("🤒 Pain/Discomfort"), KeyboardButton("😴 Fatigue/Sleep")],
-            [KeyboardButton("🍎 Digestive Issues"), KeyboardButton("💓 Heart/Breathing")],
-            [KeyboardButton("🧠 Mental/Emotional"), KeyboardButton("🔙 Back to Chat")]
+            [KeyboardButton("🤒 Pain/Discomfort"), KeyboardButton("😴 Fatigue/Sleep Issues")],
+            [KeyboardButton("🍎 Digestive Problems"), KeyboardButton("💓 Heart/Breathing")],
+            [KeyboardButton("🧠 Mental/Emotional"), KeyboardButton("🌡️ Fever/Infection")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("🧠 Switch to Chat")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -417,102 +520,32 @@ You can tell me:
         user_id = update.effective_user.id
         user_message = update.message.text
         
-        if user_message == "🔙 Back to Chat":
-            await self.return_to_chat_mode(update, user_id)
+        if user_message == "🏠 Main Menu":
+            await self.return_to_main_menu(update, user_id)
+            return MAIN_MENU
+            
+        elif user_message == "🧠 Switch to Chat":
+            await self.start_smart_chat(update, context)
             return CHAT_MODE
         
-        # Get intelligent diagnostic response
+        # Show typing action
         await update.message.reply_chat_action("typing")
+        
+        # Get detailed diagnostic response
         diagnostic_response = await self.get_intelligent_response(user_id, user_message, "symptom_analysis")
         
-        # Diagnostic-specific keyboard
+        # Enhanced diagnostic keyboard
         keyboard = [
-            [KeyboardButton("🔍 More Symptoms"), KeyboardButton("📊 Severity Level")],
-            [KeyboardButton("⏰ Duration/Timing"), KeyboardButton("🔄 Related Symptoms")],
-            [KeyboardButton("💡 Possible Causes"), KeyboardButton("🎯 Action Plan")],
-            [KeyboardButton("🔙 Back to Chat"), KeyboardButton("🏠 Main Menu")]
+            [KeyboardButton("📊 Severity Scale"), KeyboardButton("⏰ Duration/Timing")],
+            [KeyboardButton("🔄 Related Symptoms"), KeyboardButton("💡 Possible Causes")],
+            [KeyboardButton("🎯 Action Plan"), KeyboardButton("🏥 When to See Doctor")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("🧠 General Chat")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
         await update.message.reply_text(diagnostic_response, reply_markup=reply_markup, parse_mode='Markdown')
         return DIAGNOSIS_MODE
 
-    async def generate_health_insight(self, update: Update, user_id: int):
-        """Generate personalized health insights based on conversation history"""
-        
-        history = self.get_conversation_history(user_id, 15)
-        if not history:
-            await update.message.reply_text("💬 Let's chat a bit more so I can generate personalized insights for you!")
-            return CHAT_MODE
-        
-        await update.message.reply_chat_action("typing")
-        
-        # Create insight prompt
-        conversation_summary = "\n".join([f"User: {msg['user']}\nAI: {msg['ai']}" for msg in history[-10:]])
-        
-        insight_prompt = f"""
-        Based on this conversation history, generate DEEP PERSONALIZED HEALTH INSIGHTS:
-
-        CONVERSATION HISTORY:
-        {conversation_summary}
-
-        USER PROFILE:
-        {self.user_profiles.get(user_id, {})}
-
-        Create a COMPREHENSIVE but CONVERSATIONAL insight report covering:
-
-        🎯 **Patterns Noticed** (what I observe about their health)
-        💡 **Key Insights** (important observations)
-        🚀 **Growth Opportunities** (areas for improvement)
-        🌟 **Strengths** (what they're doing well)
-        🔮 **Future Focus** (what to pay attention to)
-        💪 **Empowerment Message** (encouraging next steps)
-
-        Format: Very conversational, like a caring health coach. Use emojis. 300-400 words.
-        """
-        
-        try:
-            response = gemini_model.generate_content(insight_prompt)
-            insight = response.text.strip()
-            
-            await update.message.reply_text(
-                f"📊 **Your Personalized Health Insight** 🎉\n\n{insight}",
-                parse_mode='Markdown'
-            )
-        except:
-            await update.message.reply_text(
-                "💡 **What I'm Learning About You:**\n\n"
-                "Based on our conversations, I see you're proactive about your health! "
-                "Keep sharing your experiences - the more we talk, the better I can support your wellness journey! 🌟"
-            )
-
-    async def return_to_chat_mode(self, update: Update, user_id: int):
-        """Return to smart chat mode"""
-        await update.message.reply_text(
-            "🧠 **Returning to Smart Chat Mode**\n\n"
-            "I'm here and ready to continue our conversation! What would you like to talk about? 💬",
-            reply_markup=ReplyKeyboardMarkup([
-                ["🔍 Analyze Symptoms", "💭 How are you feeling?"],
-                ["🏋️ Wellness Check", "📊 Generate Insight"],
-                ["🔄 Change Mode", "🏠 Main Menu"]
-            ], resize_keyboard=True)
-        )
-        return CHAT_MODE
-
-    async def return_to_main_menu(self, update: Update, user_id: int):
-        """Return to main menu"""
-        await update.message.reply_text(
-            "🏠 **Welcome back to Main Menu!**\n\n"
-            "Where would you like to go next? 🎉",
-            reply_markup=ReplyKeyboardMarkup([
-                ["🧠 Smart Chat Mode", "🎯 Advanced Diagnosis"],
-                ["💭 Emotional Support", "🏋️ Wellness Coach"],
-                ["📚 Health Library", "🔍 Symptom Checker"],
-                ["📊 Health Report", "🎮 Health Games"]
-            ], resize_keyboard=True)
-        )
-
-    # Enhanced feature handlers
     async def start_emotional_support(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start emotional support mode"""
         user_id = update.effective_user.id
@@ -520,22 +553,22 @@ You can tell me:
         emotional_welcome = """
 💭 **Emotional Support Mode** 🌈
 
-I'm here to listen, understand, and support you emotionally.
+You're in a safe, confidential space. I'm here to:
 
-🤗 **What we can do together:**
-- Talk about your feelings and stress
-- Develop coping strategies
-- Practice mindfulness techniques
-- Build emotional resilience
-- Create positive mental habits
+• Listen without judgment
+• Provide emotional support
+• Offer coping strategies
+• Help with stress management
+• Guide mindfulness exercises
 
-**You're in a safe space. Tell me what's on your mind:** 💬
+**What's on your mind today?** 💬
         """
         
         keyboard = [
             [KeyboardButton("😔 Stress/Anxiety"), KeyboardButton("😴 Sleep Issues")],
             [KeyboardButton("🎯 Mood Management"), KeyboardButton("🌈 Positive Mindset")],
-            [KeyboardButton("🧘 Relaxation Tips"), KeyboardButton("🔙 Main Menu")]
+            [KeyboardButton("🧘 Relaxation Tips"), KeyboardButton("📝 Journal Prompts")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("🧠 Switch to Chat")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -547,9 +580,13 @@ I'm here to listen, understand, and support you emotionally.
         user_id = update.effective_user.id
         user_message = update.message.text
         
-        if user_message == "🔙 Main Menu":
+        if user_message == "🏠 Main Menu":
             await self.return_to_main_menu(update, user_id)
-            return ConversationHandler.END
+            return MAIN_MENU
+            
+        elif user_message == "🧠 Switch to Chat":
+            await self.start_smart_chat(update, context)
+            return CHAT_MODE
         
         await update.message.reply_chat_action("typing")
         response = await self.get_intelligent_response(user_id, user_message, "emotional_support")
@@ -557,80 +594,87 @@ I'm here to listen, understand, and support you emotionally.
         keyboard = [
             [KeyboardButton("🌬️ Breathing Exercise"), KeyboardButton("📝 Journal Prompt")],
             [KeyboardButton("🎯 Coping Strategy"), KeyboardButton("🌈 Positive Affirmation")],
-            [KeyboardButton("💭 Continue Sharing"), KeyboardButton("🔙 Main Menu")]
+            [KeyboardButton("😊 Mood Booster"), KeyboardButton("💤 Sleep Help")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("💭 Continue Sharing")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
         await update.message.reply_text(response, reply_markup=reply_markup, parse_mode='Markdown')
         return EMOTIONAL_SUPPORT
 
-    async def handle_all_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Master message handler for main menu"""
-        text = update.message.text
+    async def start_health_library(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start health library mode"""
+        user_id = update.effective_user.id
         
-        feature_handlers = {
-            "🧠 Smart Chat Mode": self.start_smart_chat,
-            "🎯 Advanced Diagnosis": self.start_symptom_analysis,
-            "💭 Emotional Support": self.start_emotional_support,
-            "🏋️ Wellness Coach": self.start_wellness_coach,
-            "📚 Health Library": self.show_health_library,
-            "🔍 Symptom Checker": self.start_symptom_analysis,
-            "📊 Health Report": self.generate_health_report,
-            "🎮 Health Games": self.show_health_games,
-            "🏠 Main Menu": self.return_to_main_menu
-        }
-        
-        if text in feature_handlers:
-            if text in ["🧠 Smart Chat Mode", "🎯 Advanced Diagnosis", "💭 Emotional Support"]:
-                return await feature_handlers[text](update, context)
-            else:
-                await feature_handlers[text](update, context)
-        else:
-            # Suggest starting a conversation
-            await update.message.reply_text(
-                "🤖 **Hello! I'm RAGnosis AI** 🧠\n\n"
-                "I'm your intelligent health companion with memory and understanding! "
-                "Try **'🧠 Smart Chat Mode'** to start a conversation I'll remember, "
-                "or choose any feature from the menu below! 🎉",
-                reply_markup=ReplyKeyboardMarkup([
-                    ["🧠 Smart Chat Mode", "🎯 Advanced Diagnosis"],
-                    ["💭 Emotional Support", "🏋️ Wellness Coach"],
-                    ["📚 Health Library", "🔍 Symptom Checker"]
-                ], resize_keyboard=True)
-            )
+        library_intro = """
+📚 **Health Knowledge Library** 🏥
 
-    # Additional feature implementations
+I can provide evidence-based information on:
+
+• Diseases & Conditions
+• Symptoms & Diagnosis
+• Treatments & Medications
+• Prevention & Wellness
+• Mental Health Topics
+• Nutrition & Exercise
+
+**What would you like to learn about?** 🔍
+        """
+        
+        keyboard = [
+            [KeyboardButton("🦠 Common Illnesses"), KeyboardButton("💊 Medications")],
+            [KeyboardButton("🧠 Mental Health"), KeyboardButton("🍎 Nutrition")],
+            [KeyboardButton("🏃‍♂️ Exercise"), KeyboardButton("🛌 Sleep Health")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("🧠 Switch to Chat")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(library_intro, reply_markup=reply_markup, parse_mode='Markdown')
+        return HEALTH_LIBRARY
+
+    async def handle_health_library(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle health library queries"""
+        user_id = update.effective_user.id
+        user_message = update.message.text
+        
+        if user_message == "🏠 Main Menu":
+            await self.return_to_main_menu(update, user_id)
+            return MAIN_MENU
+            
+        elif user_message == "🧠 Switch to Chat":
+            await self.start_smart_chat(update, context)
+            return CHAT_MODE
+        
+        await update.message.reply_chat_action("typing")
+        response = await self.get_intelligent_response(user_id, user_message, "health_library")
+        
+        keyboard = [
+            [KeyboardButton("🔍 More Details"), KeyboardButton("📖 Related Topics")],
+            [KeyboardButton("💊 Treatment Info"), KeyboardButton("🎯 Prevention Tips")],
+            [KeyboardButton("🏠 Main Menu"), KeyboardButton("📚 New Topic")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+        return HEALTH_LIBRARY
+
+    async def start_medication_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start medication information mode"""
+        await update.message.reply_text(
+            "💊 **Medication Information**\n\nWhat medication would you like to know about?\n\n"
+            "You can ask about:\n• Uses and indications\n• Side effects\n• Dosage information\n• Interactions\n• Precautions",
+            parse_mode='Markdown'
+        )
+        return await self.start_smart_chat(update, context)
+
     async def start_wellness_coach(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Wellness coaching mode"""
+        """Start wellness coaching mode"""
         await update.message.reply_text(
-            "🏋️ **Wellness Coach Mode** 💪\n\n"
-            "Let's work on your overall wellness! I can help with:\n\n"
-            "• 🍎 Nutrition guidance\n• 💤 Sleep optimization\n"
-            "• 🏃‍♂️ Exercise planning\n• 😊 Stress management\n"
-            "• 🌟 Habit building\n• 🎯 Goal setting\n\n"
-            "What wellness area would you like to focus on today?",
-            reply_markup=ReplyKeyboardMarkup([
-                ["🍎 Nutrition", "💤 Sleep", "🏃‍♂️ Exercise"],
-                ["😊 Stress Management", "🌟 Habit Building"],
-                ["🔙 Main Menu"]
-            ], resize_keyboard=True)
+            "🌟 **Wellness Coach Mode** 💪\n\nLet's work on your overall health and wellness!\n\n"
+            "I can help with:\n• Nutrition guidance\n• Exercise planning\n• Stress management\n• Sleep optimization\n• Habit building\n• Goal setting",
+            parse_mode='Markdown'
         )
-
-    async def show_health_library(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Health information library"""
-        await update.message.reply_text(
-            "📚 **Health Knowledge Library** 🏥\n\n"
-            "I can provide evidence-based information on:\n\n"
-            "• Common conditions and treatments\n• Preventive healthcare\n"
-            "• Mental health topics\n• Nutrition science\n"
-            "• Fitness and exercise\n• Medication information\n\n"
-            "**Just ask me anything health-related in chat mode!** 🗣️",
-            reply_markup=ReplyKeyboardMarkup([
-                ["🧠 Ask Health Question", "🔍 Research Symptom"],
-                ["📖 Learn Prevention", "🎯 Treatment Options"],
-                ["🔙 Main Menu"]
-            ], resize_keyboard=True)
-        )
+        return await self.start_smart_chat(update, context)
 
     async def generate_health_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Generate comprehensive health report"""
@@ -639,11 +683,12 @@ I'm here to listen, understand, and support you emotionally.
         
         if len(history) < 3:
             await update.message.reply_text(
-                "📊 **Let's build your health profile!**\n\n"
+                "📊 **Let's build your health profile first!**\n\n"
                 "Chat with me a bit more in **Smart Chat Mode** so I can create "
-                "a truly personalized health report for you! 🎯"
+                "a truly personalized health report for you! 🎯",
+                parse_mode='Markdown'
             )
-            return
+            return MAIN_MENU
         
         await update.message.reply_chat_action("typing")
         
@@ -655,20 +700,19 @@ I'm here to listen, understand, and support you emotionally.
 
         {conversation_text}
 
-        USER PROFILE: {self.user_profiles.get(user_id, {})}
-
         Create an ULTIMATE HEALTH REPORT with these sections:
 
-        🎯 **Executive Summary** (2-3 sentence overview)
-        🔍 **Health Patterns** (observed trends and patterns)
-        💡 **Key Insights** (important health observations)
-        🚀 **Opportunities** (areas for improvement)
-        🌟 **Strengths** (what they're doing well)
-        📋 **Action Plan** (specific, actionable steps)
-        🏆 **Goals** (recommended health goals)
-        💝 **Encouragement** (motivational message)
+        🎯 **Health Summary** (2-3 sentence overview)
+        🔍 **Key Observations** (patterns and trends noticed)
+        💡 **Important Insights** (significant health observations)
+        🚀 **Growth Opportunities** (areas for improvement)
+        🌟 **Health Strengths** (what they're doing well)
+        📋 **Actionable Steps** (specific recommendations)
+        🏆 **Wellness Goals** (suggested health goals)
+        💝 **Encouragement & Support** (motivational message)
 
         Tone: Warm, professional, empowering. Use emojis naturally. 400-500 words.
+        Be specific and reference actual conversation content when possible.
         """
         
         try:
@@ -684,49 +728,108 @@ I'm here to listen, understand, and support you emotionally.
                 "📊 **Your Health Snapshot** 🌟\n\n"
                 "Based on our conversations, you're taking proactive steps toward better health! "
                 "Keep up the great work of being engaged with your wellbeing. "
-                "The more we communicate, the more personalized my insights become! 💪"
+                "The more we communicate, the more personalized my insights become! 💪",
+                parse_mode='Markdown'
             )
-
-    async def show_health_games(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Health-related interactive activities"""
-        games = [
-            "🎮 **Health Trivia:** True or False: Regular exercise can improve sleep quality! 💤",
-            "🤔 **Symptom Solver:** I'm thinking of a symptom that improves with rest... what could it be? 💭",
-            "🏆 **Wellness Challenge:** Take 5 deep breaths right now! 🌬️",
-            "🎯 **Health Quiz:** Which vitamin is known as the 'sunshine vitamin'? ☀️",
-            "🌈 **Gratitude Game:** Name 3 things your body did well today! ✨"
-        ]
         
-        await update.message.reply_text(
-            random.choice(games),
-            reply_markup=ReplyKeyboardMarkup([
-                ["🎮 Another Game", "📊 Health Fact"],
-                ["🏋️ Wellness Challenge", "🔙 Main Menu"]
-            ], resize_keyboard=True)
-        )
+        return MAIN_MENU
+
+    async def show_bot_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show bot information and statistics"""
+        user_id = update.effective_user.id
+        user_profile = self.user_profiles.get(user_id, {})
+        
+        info_text = f"""
+🤖 **Ragnosis AI - System Information** 📊
+
+**Your Profile:**
+👤 Name: {user_profile.get('name', 'Friend')}
+📅 Member Since: {user_profile.get('join_date', 'Recently')}
+💬 Conversations: {user_profile.get('conversation_count', 0)}
+
+**System Status:**
+🕒 Uptime: {str(datetime.now() - self.startup_time).split('.')[0]}
+📈 Total Queries: {self.total_queries}
+👥 Active Users: {len(self.user_profiles)}
+💾 Memory: {sum(len(conv) for conv in self.conversation_memory.values())} messages
+
+**Features:**
+• Intelligent conversation memory
+• Wikipedia medical research
+• Emotional support system
+• Symptom analysis
+• Health education library
+• Wellness coaching
+
+**Medical Disclaimer:**
+💡 I'm an AI assistant for informational purposes. Always consult healthcare professionals for medical advice.
+        """
+        
+        await update.message.reply_text(info_text, parse_mode='Markdown')
+        return MAIN_MENU
+
+    async def return_to_main_menu(self, update: Update, user_id: int):
+        """Return to main menu"""
+        menu_text = """
+🏠 **Main Menu** 🎯
+
+Choose how you'd like to interact:
+
+🧠 **Smart Chat** - General health conversations
+🔍 **Symptom Checker** - Detailed symptom analysis  
+💭 **Emotional Support** - Mental wellness guidance
+📚 **Health Library** - Medical information
+💊 **Medication Info** - Drug information
+🌟 **Wellness Coach** - Lifestyle guidance
+📊 **Health Report** - Personalized insights
+
+**Select an option below:** 👇
+        """
+        
+        keyboard = [
+            [KeyboardButton("🧠 Smart Chat"), KeyboardButton("🔍 Symptom Checker")],
+            [KeyboardButton("💭 Emotional Support"), KeyboardButton("📚 Health Library")],
+            [KeyboardButton("💊 Medication Info"), KeyboardButton("🌟 Wellness Coach")],
+            [KeyboardButton("📊 Health Report"), KeyboardButton("ℹ️ Bot Info")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        
+        await update.message.reply_text(menu_text, reply_markup=reply_markup, parse_mode='Markdown')
+        return MAIN_MENU
 
     async def cancel_conversation(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Cancel any conversation"""
+        """Cancel any conversation and return to main menu"""
         user_id = update.effective_user.id
         await self.return_to_main_menu(update, user_id)
-        return ConversationHandler.END
+        return MAIN_MENU
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Fallback message handler"""
+        await update.message.reply_text(
+            "🤖 **Hello! I'm Ragnosis AI** 🧠\n\n"
+            "I see you sent a message. Let me guide you to the main menu where you can choose how you'd like to interact!",
+            parse_mode='Markdown'
+        )
+        return await self.start_command(update, context)
 
 def main():
-    """Launch the enhanced RAGnosis AI"""
-    print("🚀 LAUNCHING ENHANCED RAGNOSIS AI...")
-    print("🧠 Features: Memory + Intelligent Chat + Advanced Diagnosis + Emotional AI")
+    """Launch the ultimate RAGnosis AI"""
+    print("🚀 LAUNCHING ULTIMATE RAGNOSIS AI...")
+    print("🎊 Features: Memory + Wikipedia + Emotional Support + Advanced Diagnosis!")
     
-    ragnosis_ai = EnhancedRagnosisAI()
+    ragnosis_ai = UltimateRagnosisAI()
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # ENHANCED Conversation Handler
+    # ULTIMATE Conversation Handler
     conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex('^🧠 Smart Chat Mode$'), ragnosis_ai.start_smart_chat),
-            MessageHandler(filters.Regex('^🎯 Advanced Diagnosis$'), ragnosis_ai.start_symptom_analysis),
-            MessageHandler(filters.Regex('^💭 Emotional Support$'), ragnosis_ai.start_emotional_support)
+            CommandHandler("start", ragnosis_ai.start_command),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_message)
         ],
         states={
+            MAIN_MENU: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_main_menu)
+            ],
             CHAT_MODE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_chat_message)
             ],
@@ -735,27 +838,30 @@ def main():
             ],
             EMOTIONAL_SUPPORT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_emotional_support)
+            ],
+            HEALTH_LIBRARY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_health_library)
             ]
         },
         fallbacks=[
+            CommandHandler("start", ragnosis_ai.start_command),
+            CommandHandler("cancel", ragnosis_ai.cancel_conversation),
             MessageHandler(filters.Regex('^🏠 Main Menu$'), ragnosis_ai.cancel_conversation),
-            MessageHandler(filters.Regex('^🔙 Main Menu$'), ragnosis_ai.cancel_conversation),
-            MessageHandler(filters.Regex('^🔙 Back to Chat$'), ragnosis_ai.return_to_chat_mode),
-            CommandHandler('cancel', ragnosis_ai.cancel_conversation)
+            MessageHandler(filters.Regex('^/menu$'), ragnosis_ai.cancel_conversation)
         ],
         allow_reentry=True,
         per_user=True,
         per_chat=True
     )
     
-    # Add all handlers
-    application.add_handler(CommandHandler("start", ragnosis_ai.start_command))
+    # Add conversation handler
     application.add_handler(conv_handler)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ragnosis_ai.handle_all_messages))
     
-    print("✅ ENHANCED RAGNOSIS AI READY!")
-    print("🎊 Features: Memory + Intelligent Responses + Advanced Analysis + Emotional Support!")
-    print("🤖 Bot is now running with enhanced capabilities...")
+    # Add fallback for any other messages
+    application.add_handler(MessageHandler(filters.ALL, ragnosis_ai.handle_message))
+    
+    print("✅ ULTIMATE RAGNOSIS AI READY!")
+    print("🤖 Bot is now running with advanced features...")
     
     try:
         application.run_polling(drop_pending_updates=True)
