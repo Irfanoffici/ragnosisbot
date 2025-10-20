@@ -8,9 +8,10 @@ import os
 import asyncio
 import random
 import json
-import sqlite3
+import pickle
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
+from pathlib import Path
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, 
@@ -45,57 +46,76 @@ class EnhancedRagnosisAI:
         self.user_sessions: Dict[int, Dict] = {}
         self.user_profiles: Dict[int, Dict] = {}
         self.conversation_memory: Dict[int, List] = {}
-        self.setup_database()
-        print("🎉 Enhanced RAGnosis AI initialized with memory and intelligence!")
+        self.data_dir = Path("data")
+        self.data_dir.mkdir(exist_ok=True)
+        self.load_data()
+        print("🎉 Enhanced RAGnosis AI initialized with file-based memory!")
 
-    def setup_database(self):
-        """Setup SQLite database for persistent storage"""
-        self.conn = sqlite3.connect('ragnosis_memory.db', check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_conversations (
-                user_id INTEGER,
-                timestamp TEXT,
-                user_message TEXT,
-                ai_response TEXT,
-                conversation_type TEXT
-            )
-        ''')
-        
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_profiles (
-                user_id INTEGER PRIMARY KEY,
-                age INTEGER,
-                gender TEXT,
-                medical_history TEXT,
-                lifestyle TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            )
-        ''')
-        self.conn.commit()
+    def load_data(self):
+        """Load user data from JSON files"""
+        try:
+            # Load user profiles
+            profiles_file = self.data_dir / "user_profiles.json"
+            if profiles_file.exists():
+                with open(profiles_file, 'r') as f:
+                    self.user_profiles = json.load(f)
+            
+            # Load conversation memory
+            memory_file = self.data_dir / "conversation_memory.json"
+            if memory_file.exists():
+                with open(memory_file, 'r') as f:
+                    # Convert string keys back to integers
+                    memory_data = json.load(f)
+                    self.conversation_memory = {int(k): v for k, v in memory_data.items()}
+                    
+        except Exception as e:
+            print(f"⚠️ Could not load existing data: {e}")
+            self.user_profiles = {}
+            self.conversation_memory = {}
+
+    def save_data(self):
+        """Save user data to JSON files"""
+        try:
+            # Save user profiles
+            profiles_file = self.data_dir / "user_profiles.json"
+            with open(profiles_file, 'w') as f:
+                json.dump(self.user_profiles, f, indent=2)
+            
+            # Save conversation memory
+            memory_file = self.data_dir / "conversation_memory.json"
+            with open(memory_file, 'w') as f:
+                json.dump(self.conversation_memory, f, indent=2)
+                
+        except Exception as e:
+            print(f"⚠️ Could not save data: {e}")
 
     def save_conversation(self, user_id: int, user_message: str, ai_response: str, conv_type: str = "general"):
-        """Save conversation to database"""
-        self.cursor.execute('''
-            INSERT INTO user_conversations (user_id, timestamp, user_message, ai_response, conversation_type)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, datetime.now().isoformat(), user_message, ai_response, conv_type))
-        self.conn.commit()
+        """Save conversation to memory"""
+        if user_id not in self.conversation_memory:
+            self.conversation_memory[user_id] = []
+        
+        self.conversation_memory[user_id].append({
+            "user": user_message,
+            "ai": ai_response,
+            "timestamp": datetime.now().isoformat(),
+            "type": conv_type
+        })
+        
+        # Keep only last 50 messages per user
+        if len(self.conversation_memory[user_id]) > 50:
+            self.conversation_memory[user_id] = self.conversation_memory[user_id][-50:]
+        
+        # Auto-save periodically
+        if len(self.conversation_memory[user_id]) % 5 == 0:
+            self.save_data()
 
     def get_conversation_history(self, user_id: int, limit: int = 10) -> List[Dict]:
         """Get user's conversation history"""
-        self.cursor.execute('''
-            SELECT user_message, ai_response, timestamp 
-            FROM user_conversations 
-            WHERE user_id = ? 
-            ORDER BY timestamp DESC 
-            LIMIT ?
-        ''', (user_id, limit))
+        if user_id not in self.conversation_memory:
+            return []
         
-        rows = self.cursor.fetchall()
-        return [{"user": row[0], "ai": row[1], "timestamp": row[2]} for row in reversed(rows)]
+        history = self.conversation_memory[user_id][-limit:]
+        return history
 
     # 🧠 ENHANCED PERSONALITY SYSTEM
     PERSONALITY_TRAITS = {
@@ -200,11 +220,11 @@ class EnhancedRagnosisAI:
                 'name': user.first_name,
                 'join_date': datetime.now().strftime("%Y-%m-%d"),
                 'conversation_count': 0,
-                'last_active': datetime.now(),
+                'last_active': datetime.now().isoformat(),
                 'health_interests': []
             }
         else:
-            self.user_profiles[user_id]['last_active'] = datetime.now()
+            self.user_profiles[user_id]['last_active'] = datetime.now().isoformat()
 
         welcome_text = f"""
 {self.get_personality_greeting()}
@@ -232,6 +252,9 @@ class EnhancedRagnosisAI:
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
         await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
+        
+        # Save data after profile update
+        self.save_data()
 
     async def start_smart_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start intelligent chat mode with memory"""
@@ -297,7 +320,7 @@ I'm listening carefully and will respond thoughtfully. 💬
         
         # Update user profile
         self.user_profiles[user_id]['conversation_count'] = self.user_profiles[user_id].get('conversation_count', 0) + 1
-        self.user_profiles[user_id]['last_active'] = datetime.now()
+        self.user_profiles[user_id]['last_active'] = datetime.now().isoformat()
         
         # Show typing indicator
         await update.message.reply_chat_action("typing")
@@ -314,6 +337,9 @@ I'm listening carefully and will respond thoughtfully. 💬
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
         await update.message.reply_text(ai_response, reply_markup=reply_markup, parse_mode='Markdown')
+        
+        # Save data after conversation
+        self.save_data()
         return CHAT_MODE
 
     async def handle_quick_action(self, update: Update, user_id: int, action: str):
