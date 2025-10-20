@@ -8,3 +8,4 @@ urllib3
 httpx
 asyncio-throttle
 pydantic
+sqlite3
